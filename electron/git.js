@@ -30,6 +30,16 @@ async function run(cmd, cwd) {
   return stdout.trim();
 }
 
+// execFile-based helper — avoids any shell interpretation of arguments
+async function runFile(args, cwd) {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    env: GIT_ENV,
+    timeout: 8000,
+  });
+  return stdout.trim();
+}
+
 async function getInfo(projectPath) {
   // 1. Confirm it's inside a git repo
   try {
@@ -90,30 +100,41 @@ async function getBranches(projectPath) {
     }
   }
 
-  // Use execFile to avoid the shell interpreting '|' in the --format string
+  // Step 1: get branch names via `git branch` — simple, no format tricks
   let branches = [];
   try {
-    const { stdout } = await execFileAsync(
-      'git',
-      [
-        'for-each-ref',
-        '--sort=-committerdate',
-        '--format=%(refname:short)\x00%(committerdate:relative)',
-        'refs/heads/',
-      ],
-      { cwd: projectPath, env: GIT_ENV, timeout: 8000 }
+    const namesRaw = await runFile(
+      ['branch', '--sort=-committerdate'],
+      projectPath
     );
-    branches = stdout
+    const names = namesRaw
       .split('\n')
-      .filter(Boolean)
-      .map((line) => {
-        const nulIdx = line.indexOf('\x00');
-        const name = nulIdx >= 0 ? line.slice(0, nulIdx) : line;
-        const date = nulIdx >= 0 ? line.slice(nulIdx + 1) : '';
-        return { name, date, isCurrent: name === current };
-      });
-  } catch {
-    // non-fatal
+      .map((l) => l.replace(/^\*\s*/, '').trim())
+      .filter(Boolean);
+
+    // Step 2: get relative dates for all branches in one call using for-each-ref
+    // Use a tab separator — safe because git branch names cannot contain tabs
+    let dateMap = {};
+    try {
+      const dateRaw = await runFile(
+        ['for-each-ref', '--sort=-committerdate',
+          '--format=%(refname:short)\t%(committerdate:relative)',
+          'refs/heads/'],
+        projectPath
+      );
+      for (const line of dateRaw.split('\n').filter(Boolean)) {
+        const tab = line.indexOf('\t');
+        if (tab >= 0) dateMap[line.slice(0, tab)] = line.slice(tab + 1).trim();
+      }
+    } catch { /* dates are optional */ }
+
+    branches = names.map((name) => ({
+      name,
+      date: dateMap[name] || '',
+      isCurrent: name === current,
+    }));
+  } catch (err) {
+    console.error('getBranches error:', err.message);
   }
 
   return { current, branches };
