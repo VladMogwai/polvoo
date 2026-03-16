@@ -9,6 +9,28 @@ export function useTerminal(containerRef, projectId, type, active) {
   const sessionIdRef = useRef(null);
   const unsubRef = useRef(null);
   const initializedRef = useRef(false);
+  const resizeObserverRef = useRef(null);
+
+  // Fit with retry — waits until container has non-zero dimensions
+  const fitWhenReady = useCallback(() => {
+    if (!fitAddonRef.current || !containerRef.current) return;
+
+    const attempt = () => {
+      const el = containerRef.current;
+      if (!el) return;
+      const { offsetWidth, offsetHeight } = el;
+      if (offsetWidth > 0 && offsetHeight > 0) {
+        try {
+          fitAddonRef.current && fitAddonRef.current.fit();
+        } catch (_) {}
+      } else {
+        // Container not laid out yet — try again next frame
+        requestAnimationFrame(attempt);
+      }
+    };
+
+    requestAnimationFrame(attempt);
+  }, [containerRef]);
 
   const init = useCallback(async () => {
     if (!containerRef.current || initializedRef.current) return;
@@ -53,10 +75,24 @@ export function useTerminal(containerRef, projectId, type, active) {
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Fit after a tick
-    requestAnimationFrame(() => {
-      try { fitAddon.fit(); } catch (_) {}
+    // Fit once container has real dimensions
+    fitWhenReady();
+
+    // Watch for container size changes and re-fit
+    const observer = new ResizeObserver(() => {
+      if (fitAddonRef.current && containerRef.current) {
+        const { offsetWidth, offsetHeight } = containerRef.current;
+        if (offsetWidth > 0 && offsetHeight > 0) {
+          try {
+            fitAddonRef.current.fit();
+          } catch (_) {}
+        }
+      }
     });
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+    resizeObserverRef.current = observer;
 
     // Create PTY session
     const result = await createPty(projectId, type);
@@ -87,33 +123,25 @@ export function useTerminal(containerRef, projectId, type, active) {
         ptyResize(sessionIdRef.current, cols, rows);
       }
     });
-  }, [containerRef, projectId, type]);
+  }, [containerRef, projectId, type, fitWhenReady]);
 
+  // Initialize when first activated; re-fit on subsequent activations
   useEffect(() => {
-    if (active) {
+    if (!active) return;
+
+    if (!initializedRef.current) {
       init();
+    } else {
+      // Terminal already exists — just re-fit since the tab became visible
+      fitWhenReady();
     }
-    return () => {};
-  }, [active, init]);
-
-  // Resize when container size changes
-  useEffect(() => {
-    if (!active || !fitAddonRef.current) return;
-
-    const observer = new ResizeObserver(() => {
-      if (fitAddonRef.current) {
-        try { fitAddonRef.current.fit(); } catch (_) {}
-      }
-    });
-
-    if (containerRef.current) {
-      observer.observe(containerRef.current);
-    }
-
-    return () => observer.disconnect();
-  }, [active, containerRef]);
+  }, [active, init, fitWhenReady]);
 
   const dispose = useCallback(() => {
+    if (resizeObserverRef.current) {
+      resizeObserverRef.current.disconnect();
+      resizeObserverRef.current = null;
+    }
     if (unsubRef.current) unsubRef.current();
     if (sessionIdRef.current) destroyPty(sessionIdRef.current);
     if (termRef.current) termRef.current.dispose();
@@ -130,10 +158,8 @@ export function useTerminal(containerRef, projectId, type, active) {
   }, []);
 
   const fit = useCallback(() => {
-    if (fitAddonRef.current) {
-      try { fitAddonRef.current.fit(); } catch (_) {}
-    }
-  }, []);
+    fitWhenReady();
+  }, [fitWhenReady]);
 
   return { dispose, sendInput, fit };
 }

@@ -1,9 +1,10 @@
 'use strict';
 
-const { exec } = require('child_process');
+const { exec, execFile } = require('child_process');
 const { promisify } = require('util');
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // When Electron launches it can have a stripped PATH — add all common locations
 const GIT_ENV = {
@@ -69,4 +70,65 @@ async function getInfo(projectPath) {
   return { branch, lastCommit, isRepo: true };
 }
 
-module.exports = { getInfo };
+async function getBranches(projectPath) {
+  // Confirm it's inside a git repo first
+  try {
+    await run('git rev-parse --git-dir', projectPath);
+  } catch {
+    return { current: null, branches: [] };
+  }
+
+  // Get current branch
+  let current = null;
+  try {
+    current = await run('git symbolic-ref --short HEAD', projectPath);
+  } catch {
+    try {
+      current = await run('git rev-parse --short HEAD', projectPath);
+    } catch {
+      current = null;
+    }
+  }
+
+  // Get all local branches sorted by most recent commit date
+  // Format: refname:short|committerdate:relative
+  let branches = [];
+  try {
+    const raw = await run(
+      'git for-each-ref --sort=-committerdate --format=%(refname:short)|%(committerdate:relative) refs/heads/',
+      projectPath
+    );
+    if (raw) {
+      branches = raw.split('\n').filter(Boolean).map((line) => {
+        const pipeIdx = line.indexOf('|');
+        const name = pipeIdx >= 0 ? line.slice(0, pipeIdx) : line;
+        const date = pipeIdx >= 0 ? line.slice(pipeIdx + 1) : '';
+        return {
+          name,
+          date,
+          isCurrent: name === current,
+        };
+      });
+    }
+  } catch {
+    // non-fatal — return empty list
+  }
+
+  return { current, branches };
+}
+
+async function checkoutBranch(projectPath, branchName) {
+  // Use execFile to avoid shell injection — branchName is passed as a literal arg
+  try {
+    await execFileAsync('git', ['checkout', branchName], {
+      cwd: projectPath,
+      env: GIT_ENV,
+      timeout: 10000,
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+module.exports = { getInfo, getBranches, checkoutBranch };

@@ -249,6 +249,22 @@ ipcMain.handle('git:get-info', async (_, projectPath) => {
   }
 });
 
+ipcMain.handle('git:get-branches', async (_, projectPath) => {
+  try {
+    return await gitManager.getBranches(projectPath);
+  } catch {
+    return { current: null, branches: [] };
+  }
+});
+
+ipcMain.handle('git:checkout', async (_, projectPath, branchName) => {
+  try {
+    return await gitManager.checkoutBranch(projectPath, branchName);
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ─── IPC: Editors ─────────────────────────────────────────────────────────────
 
 ipcMain.handle('editors:get-installed', async () => {

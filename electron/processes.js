@@ -3,6 +3,18 @@
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+
+// Electron strips PATH — prepend all common macOS binary locations
+const FULL_PATH = [
+  '/usr/local/bin',
+  '/opt/homebrew/bin',
+  '/opt/homebrew/sbin',
+  '/usr/bin',
+  '/bin',
+  '/usr/sbin',
+  '/sbin',
+  process.env.PATH || '',
+].join(':');
 const treeKill = require('tree-kill');
 
 // Map of projectId -> { process, status }
@@ -69,7 +81,8 @@ function start(project, onData, onStatusChange) {
 
   const env = {
     ...process.env,
-    ...envVars,
+    PATH: FULL_PATH,
+    ...envVars,       // project .env overrides go on top
     FORCE_COLOR: '1',
   };
 
@@ -128,7 +141,7 @@ function runCommand(project, command, onData) {
 
   const child = spawn(cmd, args, {
     cwd: project.path,
-    env: { ...process.env, FORCE_COLOR: '1' },
+    env: { ...process.env, PATH: FULL_PATH, FORCE_COLOR: '1' },
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

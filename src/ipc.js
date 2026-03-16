@@ -13,6 +13,9 @@ export const restartProcess = (id) => api.restartProcess(id);
 export const runCommand = (id, cmd) => api.runCommand(id, cmd);
 
 export const getGitInfo = (path) => api.getGitInfo(path);
+export const getBranches = (path) => api.getBranches(path);
+export const checkoutBranch = (path, branch) => api.checkoutBranch(path, branch);
+
 export const getInstalledEditors = () => api.getInstalledEditors();
 export const openInEditor = (editor, path) => api.openInEditor(editor, path);
 

@@ -3,13 +3,27 @@
 const { execSync, exec } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
-const path = require('path');
+const os = require('os');
 
 const execAsync = promisify(exec);
 
+const FULL_ENV = {
+  ...process.env,
+  PATH: [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+    process.env.PATH || '',
+  ].join(':'),
+};
+
 function checkCli(cmd) {
   try {
-    execSync(`which ${cmd}`, { stdio: 'ignore', timeout: 3000 });
+    execSync(`which ${cmd}`, { stdio: 'ignore', timeout: 3000, env: FULL_ENV });
     return true;
   } catch {
     return false;
@@ -36,16 +50,16 @@ async function open(editor, projectPath) {
 
   switch (editor) {
     case 'vscode':
-      await execAsync(`code "${escaped}"`);
+      await execAsync(`code "${escaped}"`, { env: FULL_ENV });
       break;
     case 'cursor':
-      await execAsync(`cursor "${escaped}"`);
+      await execAsync(`cursor "${escaped}"`, { env: FULL_ENV });
       break;
     case 'zed':
-      await execAsync(`zed "${escaped}"`);
+      await execAsync(`zed "${escaped}"`, { env: FULL_ENV });
       break;
     case 'webstorm':
-      await execAsync(`open -a WebStorm "${escaped}"`);
+      await execAsync(`open -a WebStorm "${escaped}"`, { env: FULL_ENV });
       break;
     default:
       throw new Error(`Unknown editor: ${editor}`);
@@ -53,7 +67,34 @@ async function open(editor, projectPath) {
 }
 
 async function checkClaude() {
-  return checkCli('claude');
+  // 1. Try which claude with full PATH via execSync
+  if (checkCli('claude')) return true;
+
+  // 2. Check well-known absolute paths
+  const knownPaths = [
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+    `${os.homedir()}/.npm-global/bin/claude`,
+    `${os.homedir()}/.local/bin/claude`,
+  ];
+  for (const p of knownPaths) {
+    if (fs.existsSync(p)) return true;
+  }
+
+  // 3. Try resolving via npm global root
+  try {
+    const { stdout } = await execAsync('npm root -g 2>/dev/null', { env: FULL_ENV, timeout: 4000 });
+    const npmRoot = stdout.trim();
+    if (npmRoot) {
+      const npmBin = `${npmRoot}/../bin/claude`;
+      const resolved = require('path').resolve(npmBin);
+      if (fs.existsSync(resolved)) return true;
+    }
+  } catch {
+    // non-fatal
+  }
+
+  return false;
 }
 
 async function openClaudeExternal(projectPath) {
@@ -63,8 +104,6 @@ async function openClaudeExternal(projectPath) {
 
   // Detect preferred terminal: Warp > iTerm2 > Terminal.app
   if (checkApp('/Applications/Warp.app')) {
-    // Warp supports opening via URL scheme but not running a command directly,
-    // so we use AppleScript to open Warp and cd
     const script = `
       tell application "Warp"
         activate
@@ -83,9 +122,8 @@ async function openClaudeExternal(projectPath) {
         end tell
       end tell
     `;
-    await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`).catch(() => {
-      // Fallback: just open Warp
-      execAsync('open -a Warp');
+    await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { env: FULL_ENV }).catch(() => {
+      execAsync('open -a Warp', { env: FULL_ENV });
     });
     return;
   }
@@ -101,13 +139,13 @@ tell application "iTerm2"
     end tell
   end tell
 end tell`;
-    await execAsync(`osascript << 'APPLESCRIPT'\n${script}\nAPPLESCRIPT`);
+    await execAsync(`osascript << 'APPLESCRIPT'\n${script}\nAPPLESCRIPT`, { env: FULL_ENV });
     return;
   }
 
   // Terminal.app fallback
   const script = `tell app "Terminal" to do script "${cmd.replace(/"/g, '\\"')}"`;
-  await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`);
+  await execAsync(`osascript -e '${script.replace(/'/g, "'\\''")}'`, { env: FULL_ENV });
 }
 
 module.exports = { getInstalled, open, checkClaude, openClaudeExternal };

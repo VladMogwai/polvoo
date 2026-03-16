@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import LogOutput from './LogOutput';
 import Terminal from './Terminal';
-import TerminalLauncher from './TerminalLauncher';
+import BranchSwitcher from './BranchSwitcher';
 import { useProcess } from '../hooks/useProcess';
 import {
   startProcess,
@@ -11,6 +11,7 @@ import {
   openInEditor,
   checkClaude,
   openClaudeExternal,
+  getGitInfo,
 } from '../ipc';
 
 const EDITOR_LABELS = {
@@ -37,11 +38,16 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
   const [installedEditors, setInstalledEditors] = useState([]);
   const [claudeAvailable, setClaudeAvailable] = useState(false);
   const [claudeTooltip, setClaudeTooltip] = useState(false);
+  const [localGitInfo, setLocalGitInfo] = useState(gitInfo || {});
   const claudeTermRef = useRef(null);
 
   const { logs, clearLogs, run } = useProcess(project.id);
   const status = project.status || 'stopped';
-  const git = gitInfo || {};
+
+  // Keep local git info in sync with prop updates
+  useEffect(() => {
+    setLocalGitInfo(gitInfo || {});
+  }, [gitInfo]);
 
   useEffect(() => {
     getInstalledEditors().then(setInstalledEditors);
@@ -72,6 +78,18 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
     }
     setActiveTab('Claude');
   }
+
+  // Refresh git info after a branch checkout
+  const handleBranchChange = useCallback(async () => {
+    try {
+      const info = await getGitInfo(project.path);
+      setLocalGitInfo(info);
+    } catch {
+      // non-fatal
+    }
+  }, [project.path]);
+
+  const git = localGitInfo;
 
   return (
     <div className="flex flex-col h-full bg-[#0d1626]">
@@ -109,12 +127,22 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
 
       {/* ── Git info ──────────────────────────────────────────── */}
       <div className="px-4 py-2.5 border-b border-slate-700/60 flex items-center gap-4 text-xs">
-        <div className="flex items-center gap-1.5 text-slate-400">
-          <svg className="w-3 h-3 text-slate-500" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
-          </svg>
-          <span className="font-mono text-slate-300">{git.branch || '—'}</span>
-        </div>
+        {/* Branch switcher (or plain text if not a repo) */}
+        {git.isRepo !== false && git.branch ? (
+          <BranchSwitcher
+            projectPath={project.path}
+            currentBranch={git.branch}
+            onBranchChange={handleBranchChange}
+          />
+        ) : (
+          <div className="flex items-center gap-1.5 text-slate-400">
+            <svg className="w-3 h-3 text-slate-500" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M11.75 2.5a.75.75 0 100 1.5.75.75 0 000-1.5zm-2.25.75a2.25 2.25 0 113 2.122V6A2.5 2.5 0 0110 8.5H6a1 1 0 00-1 1v1.128a2.251 2.251 0 11-1.5 0V5.372a2.25 2.25 0 111.5 0v1.836A2.492 2.492 0 016 7h4a1 1 0 001-1v-.628A2.25 2.25 0 019.5 3.25zM4.25 12a.75.75 0 100 1.5.75.75 0 000-1.5zM3.5 3.25a.75.75 0 111.5 0 .75.75 0 01-1.5 0z" />
+            </svg>
+            <span className="font-mono text-slate-500">—</span>
+          </div>
+        )}
+
         {git.lastCommit && (
           <div className="flex items-center gap-1.5 min-w-0 text-slate-500">
             <span className="font-mono text-violet-400 flex-shrink-0">{git.lastCommit.hash}</span>
@@ -233,27 +261,35 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
           <LogOutput logs={logs} onCommand={(cmd) => run(cmd)} />
         </div>
 
-        {/* Terminal — external launcher */}
-        <div className={`h-full overflow-hidden ${activeTab === 'Terminal' ? 'block' : 'hidden'}`}>
-          <TerminalLauncher
-            projectPath={project.path}
-            projectName={project.name}
+        {/* Terminal — embedded xterm */}
+        <div
+          className={`h-full overflow-hidden ${activeTab === 'Terminal' ? 'block' : 'hidden'}`}
+          style={{ minHeight: 0 }}
+        >
+          <Terminal
+            key={project.id + '-terminal'}
+            projectId={project.id}
+            type="terminal"
+            active={activeTab === 'Terminal'}
           />
         </div>
 
         {/* Claude */}
-        <div className={`h-full flex flex-col ${activeTab === 'Claude' ? 'flex' : 'hidden'}`}>
+        <div
+          className={`h-full overflow-hidden ${activeTab === 'Claude' ? 'flex flex-col' : 'hidden'}`}
+          style={{ minHeight: 0 }}
+        >
           {!claudeAvailable && (
-            <div className="p-5 text-xs text-slate-400 space-y-2 border-b border-slate-700/60">
+            <div className="p-5 text-xs text-slate-400 space-y-2 border-b border-slate-700/60 flex-shrink-0">
               <p className="text-slate-300 font-medium">Claude Code is not installed.</p>
               <code className="block bg-slate-800 rounded-lg px-3 py-2 font-mono text-violet-400">
                 npm install -g @anthropic-ai/claude-code
               </code>
             </div>
           )}
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 min-h-0 overflow-hidden">
             <Terminal
-              key={`claude-${project.id}`}
+              key={project.id + '-claude'}
               projectId={project.id}
               type="claude"
               active={activeTab === 'Claude'}

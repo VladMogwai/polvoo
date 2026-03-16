@@ -6,26 +6,33 @@ export default function Terminal({ projectId, type, active, onReady }) {
   const containerRef = useRef(null);
   const { dispose, sendInput, fit } = useTerminal(containerRef, projectId, type, active);
 
+  // Re-fit whenever the tab becomes active
   useEffect(() => {
     if (active) {
-      // Give DOM a tick before fitting
-      const t = setTimeout(() => fit(), 100);
-      return () => clearTimeout(t);
+      fit();
     }
   }, [active, fit]);
 
-  useEffect(() => {
-    return () => dispose();
-  }, [dispose]);
-
+  // Notify parent when ready
   useEffect(() => {
     if (active && onReady) onReady({ sendInput });
   }, [active, onReady, sendInput]);
 
+  // Dispose on unmount
+  useEffect(() => {
+    return () => dispose();
+  }, [dispose]);
+
   return (
     <div
       ref={containerRef}
-      style={{ width: '100%', height: '100%', background: '#0b1120' }}
+      style={{
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        background: '#0b1120',
+        overflow: 'hidden',
+      }}
     />
   );
 }

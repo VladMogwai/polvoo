@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Git
   getGitInfo: (projectPath) => ipcRenderer.invoke('git:get-info', projectPath),
+  getBranches: (projectPath) => ipcRenderer.invoke('git:get-branches', projectPath),
+  checkoutBranch: (projectPath, branch) => ipcRenderer.invoke('git:checkout', projectPath, branch),
 
   // Editors
   getInstalledEditors: () => ipcRenderer.invoke('editors:get-installed'),
