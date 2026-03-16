@@ -90,28 +90,30 @@ async function getBranches(projectPath) {
     }
   }
 
-  // Get all local branches sorted by most recent commit date
-  // Format: refname:short|committerdate:relative
+  // Use execFile to avoid the shell interpreting '|' in the --format string
   let branches = [];
   try {
-    const raw = await run(
-      'git for-each-ref --sort=-committerdate --format=%(refname:short)|%(committerdate:relative) refs/heads/',
-      projectPath
+    const { stdout } = await execFileAsync(
+      'git',
+      [
+        'for-each-ref',
+        '--sort=-committerdate',
+        '--format=%(refname:short)\x00%(committerdate:relative)',
+        'refs/heads/',
+      ],
+      { cwd: projectPath, env: GIT_ENV, timeout: 8000 }
     );
-    if (raw) {
-      branches = raw.split('\n').filter(Boolean).map((line) => {
-        const pipeIdx = line.indexOf('|');
-        const name = pipeIdx >= 0 ? line.slice(0, pipeIdx) : line;
-        const date = pipeIdx >= 0 ? line.slice(pipeIdx + 1) : '';
-        return {
-          name,
-          date,
-          isCurrent: name === current,
-        };
+    branches = stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const nulIdx = line.indexOf('\x00');
+        const name = nulIdx >= 0 ? line.slice(0, nulIdx) : line;
+        const date = nulIdx >= 0 ? line.slice(nulIdx + 1) : '';
+        return { name, date, isCurrent: name === current };
       });
-    }
   } catch {
-    // non-fatal — return empty list
+    // non-fatal
   }
 
   return { current, branches };

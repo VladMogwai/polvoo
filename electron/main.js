@@ -349,6 +349,14 @@ ipcMain.handle('settings:set', (_, updates) => {
   return settings.set(updates);
 });
 
+ipcMain.handle('terminals:add-custom', (_, terminal) => {
+  return settings.addCustomTerminal(terminal);
+});
+
+ipcMain.handle('terminals:remove-custom', (_, id) => {
+  return settings.removeCustomTerminal(id);
+});
+
 // ─── IPC: Dialog ──────────────────────────────────────────────────────────────
 
 ipcMain.handle('dialog:open-folder', async () => {
@@ -356,6 +364,17 @@ ipcMain.handle('dialog:open-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
     title: 'Select Project Folder',
+  });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('dialog:pick-app', async () => {
+  if (!mainWindow) return null;
+  const result = await dialog.showOpenDialog(mainWindow, {
+    properties: ['openFile'],
+    title: 'Select Terminal App',
+    defaultPath: '/Applications',
+    filters: [{ name: 'Applications', extensions: ['app'] }],
   });
   return result.canceled ? null : result.filePaths[0];
 });

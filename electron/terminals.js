@@ -1,98 +1,92 @@
 'use strict';
 
-const { execSync, exec } = require('child_process');
+const { execSync, exec, execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
+const settings = require('./settings');
 
 const execAsync = promisify(exec);
 
-// All known terminal apps, in preference order
+const FULL_ENV = {
+  ...process.env,
+  PATH: [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/bin',
+    '/bin',
+    process.env.PATH || '',
+  ].join(':'),
+};
+
+// Built-in known terminals
 const KNOWN_TERMINALS = [
-  {
-    id: 'warp',
-    name: 'Warp',
-    appPath: '/Applications/Warp.app',
-    cli: null,
-  },
-  {
-    id: 'iterm2',
-    name: 'iTerm2',
-    appPath: '/Applications/iTerm.app',
-    cli: null,
-  },
-  {
-    id: 'ghostty',
-    name: 'Ghostty',
-    appPath: '/Applications/Ghostty.app',
-    cli: null,
-  },
-  {
-    id: 'wezterm',
-    name: 'WezTerm',
-    appPath: '/Applications/WezTerm.app',
-    cli: 'wezterm',
-  },
-  {
-    id: 'alacritty',
-    name: 'Alacritty',
-    appPath: '/Applications/Alacritty.app',
-    cli: null,
-  },
-  {
-    id: 'hyper',
-    name: 'Hyper',
-    appPath: '/Applications/Hyper.app',
-    cli: null,
-  },
-  {
-    id: 'kitty',
-    name: 'kitty',
-    appPath: '/Applications/kitty.app',
-    cli: 'kitty',
-  },
-  {
-    id: 'terminal',
-    name: 'Terminal',
-    appPath: '/System/Applications/Utilities/Terminal.app',
-    cli: null,
-  },
+  { id: 'warp',      name: 'Warp',      appPath: '/Applications/Warp.app' },
+  { id: 'iterm2',    name: 'iTerm2',    appPath: '/Applications/iTerm.app' },
+  { id: 'ghostty',   name: 'Ghostty',   appPath: '/Applications/Ghostty.app' },
+  { id: 'wezterm',   name: 'WezTerm',   appPath: '/Applications/WezTerm.app', cli: 'wezterm' },
+  { id: 'alacritty', name: 'Alacritty', appPath: '/Applications/Alacritty.app' },
+  { id: 'hyper',     name: 'Hyper',     appPath: '/Applications/Hyper.app' },
+  { id: 'kitty',     name: 'kitty',     appPath: '/Applications/kitty.app', cli: 'kitty' },
+  { id: 'terminal',  name: 'Terminal',  appPath: '/System/Applications/Utilities/Terminal.app' },
 ];
 
-function checkApp(appPath) {
-  return fs.existsSync(appPath);
-}
-
+function checkApp(p) { return fs.existsSync(p); }
 function checkCli(cmd) {
-  try {
-    execSync(`which ${cmd}`, { stdio: 'ignore', timeout: 2000 });
-    return true;
-  } catch {
-    return false;
-  }
+  try { execSync(`which ${cmd}`, { stdio: 'ignore', timeout: 2000, env: FULL_ENV }); return true; }
+  catch { return false; }
 }
 
 function getInstalled() {
-  return KNOWN_TERMINALS.filter((t) => {
-    if (t.appPath && checkApp(t.appPath)) return true;
-    if (t.cli && checkCli(t.cli)) return true;
-    return false;
-  }).map(({ id, name }) => ({ id, name }));
+  const autoDetected = KNOWN_TERMINALS
+    .filter((t) => (t.appPath && checkApp(t.appPath)) || (t.cli && checkCli(t.cli)))
+    .map(({ id, name }) => ({ id, name, isCustom: false }));
+
+  const custom = (settings.get().customTerminals || []).map((t) => ({
+    id: t.id,
+    name: t.name,
+    appPath: t.appPath,
+    extraPath: t.extraPath || '',
+    isCustom: true,
+  }));
+
+  return [...autoDetected, ...custom];
 }
 
 async function openInTerminal(terminalId, projectPath) {
   const escaped = projectPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const terminal = KNOWN_TERMINALS.find((t) => t.id === terminalId);
-  if (!terminal) throw new Error(`Unknown terminal: ${terminalId}`);
 
+  // Check custom terminals first
+  const custom = (settings.get().customTerminals || []).find((t) => t.id === terminalId);
+  if (custom) {
+    // Build env with any extra PATH the user specified
+    const extraPath = custom.extraPath ? custom.extraPath.split(':').filter(Boolean) : [];
+    const envWithExtra = {
+      ...FULL_ENV,
+      PATH: [...extraPath, FULL_ENV.PATH].join(':'),
+    };
+
+    if (custom.openCommand) {
+      // User-provided command template: {path} is replaced
+      const cmd = custom.openCommand.replace(/{path}/g, escaped);
+      await execAsync(cmd, { env: envWithExtra });
+    } else if (custom.appPath) {
+      await execAsync(`open -a "${custom.appPath.replace(/"/g, '\\"')}" "${escaped}"`, { env: envWithExtra });
+    } else {
+      throw new Error(`Custom terminal "${custom.name}" has no appPath or openCommand`);
+    }
+    return;
+  }
+
+  // Built-in terminals
+  const env = FULL_ENV;
   switch (terminalId) {
     case 'warp':
-      // Warp opens the given directory in a new window
-      await execAsync(`open -a Warp "${escaped}"`);
+      await execAsync(`open -a Warp "${escaped}"`, { env });
       break;
 
     case 'iterm2': {
-      const script = `
-tell application "iTerm2"
+      const script = `tell application "iTerm2"
   activate
   tell current window
     create tab with default profile
@@ -101,41 +95,40 @@ tell application "iTerm2"
     end tell
   end tell
 end tell`;
-      await execAsync(`osascript << 'APPLESCRIPT'\n${script}\nAPPLESCRIPT`).catch(async () => {
-        // fallback: just open iTerm with path
-        await execAsync(`open -a iTerm "${escaped}"`);
+      await execAsync(`osascript << 'APPLESCRIPT'\n${script}\nAPPLESCRIPT`, { env }).catch(async () => {
+        await execAsync(`open -a iTerm "${escaped}"`, { env });
       });
       break;
     }
 
     case 'ghostty':
-      await execAsync(`open -a Ghostty "${escaped}"`);
+      await execAsync(`open -a Ghostty "${escaped}"`, { env });
       break;
 
     case 'wezterm':
-      await execAsync(`wezterm start --cwd "${escaped}"`);
-      break;
-
-    case 'alacritty':
-      await execAsync(`open -a Alacritty --args --working-directory "${escaped}"`).catch(async () => {
-        await execAsync(`open -a Alacritty "${escaped}"`);
+      await execAsync(`wezterm start --cwd "${escaped}"`, { env }).catch(async () => {
+        await execAsync(`open -a WezTerm "${escaped}"`, { env });
       });
       break;
 
+    case 'alacritty':
+      await execAsync(`open -a Alacritty "${escaped}"`, { env });
+      break;
+
     case 'hyper':
-      await execAsync(`open -a Hyper "${escaped}"`);
+      await execAsync(`open -a Hyper "${escaped}"`, { env });
       break;
 
     case 'kitty':
-      await execAsync(`kitty --directory "${escaped}"`).catch(async () => {
-        await execAsync(`open -a kitty "${escaped}"`);
+      await execAsync(`kitty --directory "${escaped}"`, { env }).catch(async () => {
+        await execAsync(`open -a kitty "${escaped}"`, { env });
       });
       break;
 
     case 'terminal':
     default: {
       const script2 = `tell app "Terminal" to do script "cd \\"${escaped}\\""`;
-      await execAsync(`osascript -e '${script2.replace(/'/g, "'\\''")}'`);
+      await execAsync(`osascript -e '${script2.replace(/'/g, "'\\''")}'`, { env });
       break;
     }
   }

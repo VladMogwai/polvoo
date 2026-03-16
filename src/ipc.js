@@ -30,8 +30,11 @@ export const openFolderDialog = () => api.openFolderDialog();
 
 export const getInstalledTerminals = () => api.getInstalledTerminals();
 export const openInTerminal = (terminalId, path) => api.openInTerminal(terminalId, path);
+export const addCustomTerminal = (t) => api.addCustomTerminal(t);
+export const removeCustomTerminal = (id) => api.removeCustomTerminal(id);
 export const getSettings = () => api.getSettings();
 export const setSettings = (updates) => api.setSettings(updates);
+export const pickAppDialog = () => api.pickAppDialog();
 
 // Event listener helpers — each returns an unsubscribe function
 export const onLogOutput = (cb) => api.onLogOutput(cb);

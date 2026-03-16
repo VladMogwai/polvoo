@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import LogOutput from './LogOutput';
 import Terminal from './Terminal';
 import BranchSwitcher from './BranchSwitcher';
+import TerminalMenu from './TerminalMenu';
 import { useProcess } from '../hooks/useProcess';
 import {
   startProcess,
@@ -186,6 +187,9 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
             {EDITOR_LABELS[editor]}
           </button>
         ))}
+
+        {/* External terminal launcher */}
+        <TerminalMenu projectPath={project.path} />
 
         {/* Claude Code */}
         <div className="relative flex items-center gap-1 ml-auto">

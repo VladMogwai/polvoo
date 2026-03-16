@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Terminals
   getInstalledTerminals: () => ipcRenderer.invoke('terminals:get-installed'),
   openInTerminal: (terminalId, projectPath) => ipcRenderer.invoke('terminal:open', terminalId, projectPath),
+  addCustomTerminal: (terminal) => ipcRenderer.invoke('terminals:add-custom', terminal),
+  removeCustomTerminal: (id) => ipcRenderer.invoke('terminals:remove-custom', id),
 
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
@@ -45,6 +47,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Dialog
   openFolderDialog: () => ipcRenderer.invoke('dialog:open-folder'),
+  pickAppDialog: () => ipcRenderer.invoke('dialog:pick-app'),
 
   // Event listeners (renderer ← main)
   onLogOutput: (callback) => {
