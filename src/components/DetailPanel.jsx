@@ -7,14 +7,10 @@ import GitHistoryTab from './git/GitHistoryTab';
 import PortBadge from './PortBadge';
 import { useProcess } from '../hooks/useProcess';
 import {
-  startProcess,
-  stopProcess,
-  restartProcess,
   getInstalledEditors,
   getRunningEditors,
   openInEditor,
   getGitInfo,
-  updateProject,
 } from '../ipc';
 
 const EDITOR_LABELS = {
@@ -70,8 +66,6 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
   const [installedEditors, setInstalledEditors] = useState([]);
   const [runningEditors, setRunningEditors] = useState([]);
   const [localGitInfo, setLocalGitInfo] = useState(gitInfo || {});
-  const [editingCmd, setEditingCmd] = useState(false);
-  const [cmdValue, setCmdValue] = useState('');
 
   const { logs, clearLogs, run, killCmd, runningCmd } = useProcess(project.id);
   const status = project.status || 'stopped';
@@ -181,110 +175,32 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
 
       {/* ── Controls ─────────────────────────────────────────── */}
       <div className="px-4 py-2.5 border-b border-slate-700/60 flex flex-wrap items-center gap-2">
-        {/* Start command inline editor */}
-        {editingCmd ? (
-          <form
-            className="flex items-center gap-1.5 flex-1 min-w-0"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const v = cmdValue.trim();
-              if (v) await updateProject(project.id, { startCommand: v });
-              setEditingCmd(false);
-            }}
-          >
-            <input
-              autoFocus
-              value={cmdValue}
-              onChange={(e) => setCmdValue(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Escape') setEditingCmd(false); }}
-              onBlur={async () => {
-                const v = cmdValue.trim();
-                if (v) await updateProject(project.id, { startCommand: v });
-                setEditingCmd(false);
-              }}
-              className="flex-1 min-w-0 px-2 py-1 bg-slate-800 border border-violet-500/60 rounded-lg text-xs font-mono text-slate-200 outline-none"
-              placeholder="e.g. npm run dev"
-            />
-            <button type="submit" className="px-2 py-1 bg-violet-600/30 hover:bg-violet-600/50 text-violet-300 text-xs rounded-lg border border-violet-600/40 transition-colors flex-shrink-0">
-              Save
-            </button>
-            <button type="button" onClick={() => setEditingCmd(false)} className="px-2 py-1 text-slate-500 hover:text-slate-300 text-xs transition-colors flex-shrink-0">
-              Cancel
-            </button>
-          </form>
-        ) : (
-          <>
-            {/* Process controls */}
-            {status !== 'running' ? (
-              <Tooltip label={project.startCommand} sub="Starts the dev process">
-                <button
-                  onClick={() => startProcess(project.id)}
-                  className="px-3 py-1 bg-emerald-600/20 hover:bg-emerald-600/40 text-emerald-400 text-xs font-medium rounded-lg border border-emerald-600/30 transition-colors"
-                >
-                  ▶ Start
-                </button>
-              </Tooltip>
-            ) : (
-              <Tooltip label="kill -SIGTERM <pid>" sub="Stops the running process">
-                <button
-                  onClick={() => stopProcess(project.id)}
-                  className="px-3 py-1 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs font-medium rounded-lg border border-red-600/30 transition-colors"
-                >
-                  ■ Stop
-                </button>
-              </Tooltip>
-            )}
-            {/* Edit start command */}
-            <Tooltip label={project.startCommand} sub="Click to edit start command">
+        {/* Editor buttons */}
+        {installedEditors.map((editor) => {
+          const isOpen = runningEditors.includes(editor);
+          return (
+            <Tooltip
+              key={editor}
+              label={isOpen ? `${EDITOR_LABELS[editor]} is running` : `Open in ${EDITOR_LABELS[editor]}`}
+              sub={isOpen ? 'Click to bring to front' : project.path}
+            >
               <button
-                onClick={() => { setCmdValue(project.startCommand || ''); setEditingCmd(true); }}
-                className="px-2 py-1 text-slate-600 hover:text-slate-300 hover:bg-slate-700 text-xs rounded-lg transition-colors"
-                title="Edit start command"
+                onClick={() => openInEditor(editor, project.path)}
+                className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded-lg transition-colors border ${
+                  isOpen
+                    ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border-emerald-600/30'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-500 border-slate-700 hover:text-slate-300'
+                }`}
               >
-                ✎
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+                {EDITOR_LABELS[editor]}
               </button>
             </Tooltip>
-          </>
-        )}
-        {!editingCmd && (
-          <>
-            <Tooltip label={project.startCommand} sub="Stop + restart the process">
-              <button
-                onClick={() => restartProcess(project.id)}
-                className="px-3 py-1 bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-medium rounded-lg transition-colors"
-              >
-                ↺ Restart
-              </button>
-            </Tooltip>
+          );
+        })}
 
-            {/* Editor buttons */}
-            {installedEditors.map((editor) => {
-              const isOpen = runningEditors.includes(editor);
-              return (
-                <Tooltip
-                  key={editor}
-                  label={isOpen ? `${EDITOR_LABELS[editor]} is running` : `Open in ${EDITOR_LABELS[editor]}`}
-                  sub={isOpen ? 'Click to bring to front' : project.path}
-                >
-                  <button
-                    onClick={() => openInEditor(editor, project.path)}
-                    className={`flex items-center gap-1.5 px-3 py-1 text-xs rounded-lg transition-colors border ${
-                      isOpen
-                        ? 'bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border-emerald-600/30'
-                        : 'bg-slate-800 hover:bg-slate-700 text-slate-500 border-slate-700 hover:text-slate-300'
-                    }`}
-                  >
-                    <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isOpen ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
-                    {EDITOR_LABELS[editor]}
-                  </button>
-                </Tooltip>
-              );
-            })}
-
-            {/* External terminal launcher */}
-            <TerminalMenu projectPath={project.path} />
-          </>
-        )}
+        {/* External terminal launcher */}
+        <TerminalMenu projectPath={project.path} />
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────── */}

@@ -110,15 +110,6 @@ export function useTerminal(containerRef, projectId, type, active, options = {})
           return false;
         }
 
-        case 'v': {
-          navigator.clipboard.readText().then((text) => {
-            if (text && sessionIdRef.current) {
-              ptyInput(sessionIdRef.current, text);
-            }
-          }).catch(() => {});
-          return false;
-        }
-
         case 'k': {
           // Clear screen
           if (sessionIdRef.current) {
