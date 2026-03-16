@@ -4,27 +4,21 @@ set -e
 VERSION=$1
 
 if [ -z "$VERSION" ]; then
-  echo "Usage: ./release.sh 1.0.1"
+  echo "Usage: ./release-fast.sh 1.0.1"
   exit 1
 fi
 
-echo "🚀 Full release v$VERSION (arm64 + x64)..."
+echo "⚡ Fast release v$VERSION (arm64 only)..."
 
 npm version $VERSION --no-git-tag-version --allow-same-version
 
-echo "📦 Building arm64 + x64..."
-vite build
-npx electron-builder --mac --x64 --publish never
-npx electron-builder --mac --arm64 --publish never
+echo "📦 Building arm64 only..."
+npm run dist
 
 ARM64_FILE="dist/Dev Dashboard-$VERSION-arm64-mac.zip"
-X64_FILE="dist/Dev Dashboard-$VERSION-mac.zip"
-
 ARM64_HASH=$(shasum -a 256 "$ARM64_FILE" | awk '{print $1}')
-X64_HASH=$(shasum -a 256 "$X64_FILE" | awk '{print $1}')
 
 echo "✅ arm64: $ARM64_HASH"
-echo "✅ x64:   $X64_HASH"
 
 git add package.json
 git commit -m "Release v$VERSION"
@@ -35,9 +29,8 @@ git push origin "v$VERSION"
 echo "📤 Uploading to GitHub Release..."
 gh release create "v$VERSION" \
   "$ARM64_FILE" \
-  "$X64_FILE" \
   --title "Dev Dashboard $VERSION" \
-  --notes "Release v$VERSION"
+  --notes "Release v$VERSION (Apple Silicon)"
 
 echo "✅ GitHub Release created and files uploaded!"
 
@@ -47,13 +40,8 @@ cat > "$TAP_DIR/Casks/dev-dashboard.rb" << EOF
 cask "dev-dashboard" do
   version "$VERSION"
 
-  if Hardware::CPU.arm?
-    sha256 "$ARM64_HASH"
-    url "https://github.com/VladMogwai/dev-dashboard/releases/download/v$VERSION/Dev.Dashboard-$VERSION-arm64-mac.zip"
-  else
-    sha256 "$X64_HASH"
-    url "https://github.com/VladMogwai/dev-dashboard/releases/download/v$VERSION/Dev.Dashboard-$VERSION-mac.zip"
-  end
+  sha256 "$ARM64_HASH"
+  url "https://github.com/VladMogwai/dev-dashboard/releases/download/v$VERSION/Dev.Dashboard-$VERSION-arm64-mac.zip"
 
   name "Dev Dashboard"
   desc "Developer Project Dashboard — like Docker Desktop for local dev projects"
@@ -78,5 +66,5 @@ git commit -m "Release v$VERSION"
 git push
 
 echo ""
-echo "✅ Full release v$VERSION is live!"
+echo "✅ Fast release v$VERSION is live!"
 echo "👉 https://github.com/VladMogwai/dev-dashboard/releases/tag/v$VERSION"
