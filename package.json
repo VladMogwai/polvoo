@@ -1,12 +1,14 @@
 {
   "name": "dev-dashboard",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Developer Project Dashboard — like Docker Desktop for local dev projects",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "dist": "vite build && electron-builder",
+    "build:local": "vite build && npx electron-builder --mac dmg --arm64 --publish never",
+    "install:local": "./dev-install.sh",
     "release": "./release.sh",
     "release:fast": "./release-fast.sh",
     "postinstall": "electron-rebuild -f -w node-pty"
@@ -15,6 +17,11 @@
     "appId": "com.devdashboard.app",
     "productName": "Dev Dashboard",
     "asar": true,
+    "publish": {
+      "provider": "github",
+      "owner": "VladMogwai",
+      "repo": "dev-dashboard"
+    },
     "asarUnpack": [
       "**/node_modules/node-pty/**"
     ],
@@ -48,6 +55,7 @@
     "@xterm/xterm": "^5.5.0",
     "ansi-to-html": "^0.7.2",
     "dotenv": "^17.3.1",
+    "electron-updater": "^6.8.3",
     "node-pty": "^1.0.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
