@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   gitUnstageAll: (projectId) => ipcRenderer.invoke('git:unstageAll', projectId),
   gitCommit: (projectId, summary, description) => ipcRenderer.invoke('git:commit', projectId, summary, description),
   gitPush: (projectId) => ipcRenderer.invoke('git:push', projectId),
+  gitPull: (projectId) => ipcRenderer.invoke('git:pull', projectId),
 
   // Command history
   historyGet: (projectId) => ipcRenderer.invoke('history:get', projectId),

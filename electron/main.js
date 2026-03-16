@@ -488,6 +488,12 @@ ipcMain.handle('git:push', async (_, projectId) => {
   return gitManager.pushChanges(project.path);
 });
 
+ipcMain.handle('git:pull', async (_, projectId) => {
+  const project = projects.find((p) => p.id === projectId);
+  if (!project) return { success: false };
+  return gitManager.pullChanges(project.path);
+});
+
 // ─── IPC: Command history ─────────────────────────────────────────────────────
 
 ipcMain.handle('history:get', (_, projectId) => {

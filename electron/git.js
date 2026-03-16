@@ -381,4 +381,15 @@ async function pushChanges(repoPath) {
   }
 }
 
-module.exports = { getInfo, getBranches, checkoutBranch, createBranch, getCommitLog, getCommitFiles, getCommitDiff, getWorkingTreeDiff, getStagingStatus, stageFile, unstageFile, stageAll, unstageAll, commitChanges, pushChanges };
+async function pullChanges(repoPath) {
+  try {
+    const { stdout, stderr } = await execAsync('git pull', {
+      cwd: repoPath, env: GIT_ENV, timeout: 30000,
+    });
+    return { success: true, output: (stdout + stderr).trim() };
+  } catch (err) {
+    return { success: false, error: (err.stderr || err.message || String(err)).trim() };
+  }
+}
+
+module.exports = { getInfo, getBranches, checkoutBranch, createBranch, getCommitLog, getCommitFiles, getCommitDiff, getWorkingTreeDiff, getStagingStatus, stageFile, unstageFile, stageAll, unstageAll, commitChanges, pushChanges, pullChanges };

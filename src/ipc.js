@@ -63,6 +63,7 @@ export const gitStageAll = (projectId) => api.gitStageAll(projectId);
 export const gitUnstageAll = (projectId) => api.gitUnstageAll(projectId);
 export const gitCommit = (projectId, summary, description) => api.gitCommit(projectId, summary, description);
 export const gitPush = (projectId) => api.gitPush(projectId);
+export const gitPull = (projectId) => api.gitPull(projectId);
 
 export const historyGet = (id) => api.historyGet(id);
 export const historyAdd = (id, cmd) => api.historyAdd(id, cmd);

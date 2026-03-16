@@ -3,7 +3,7 @@ import {
   gitGetStagingStatus,
   gitStageFile, gitUnstageFile,
   gitStageAll, gitUnstageAll,
-  gitCommit, gitPush,
+  gitCommit, gitPush, gitPull,
 } from '../../ipc';
 
 const STATUS_LABEL = { M: 'M', A: 'A', D: 'D', R: 'R', C: 'C', '?': '?' };
@@ -64,6 +64,7 @@ export default function GitStagingPanel({ projectId, active = true, onDiffSelect
   const [loading, setLoading] = useState(null); // tracks which file op is in progress
   const [committing, setCommitting] = useState(false);
   const [pushing, setPushing] = useState(false);
+  const [pulling, setPulling] = useState(false);
   const [summary, setSummary] = useState('');
   const [description, setDescription] = useState('');
   const [error, setError] = useState('');
@@ -141,6 +142,21 @@ export default function GitStagingPanel({ projectId, active = true, onDiffSelect
       setError(result.error || 'Push failed');
     }
     setPushing(false);
+  }
+
+  async function handlePull() {
+    setPulling(true);
+    setError('');
+    setSuccessMsg('');
+    const result = await gitPull(projectId);
+    if (result.success) {
+      setSuccessMsg(result.output || 'Already up to date');
+      setTimeout(() => setSuccessMsg(''), 4000);
+      await refresh();
+    } else {
+      setError(result.error || 'Pull failed');
+    }
+    setPulling(false);
   }
 
   const stagedFiles = status.files.filter((f) => f.isStaged);
@@ -276,21 +292,38 @@ export default function GitStagingPanel({ projectId, active = true, onDiffSelect
           )}
         </button>
 
-        <button
-          onClick={handlePush}
-          disabled={pushing}
-          className="w-full py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600"
-        >
-          {pushing ? (
-            <span className="flex items-center justify-center gap-2">
-              <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-              </svg>
-              Pushing…
-            </span>
-          ) : '↑ Push'}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handlePull}
+            disabled={pulling || pushing}
+            className="flex-1 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600"
+          >
+            {pulling ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                Pulling…
+              </span>
+            ) : '↓ Pull'}
+          </button>
+          <button
+            onClick={handlePush}
+            disabled={pushing || pulling}
+            className="flex-1 py-2 rounded-lg text-xs font-semibold transition-colors disabled:opacity-40 bg-slate-700 hover:bg-slate-600 text-slate-200 border border-slate-600"
+          >
+            {pushing ? (
+              <span className="flex items-center justify-center gap-2">
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+                Pushing…
+              </span>
+            ) : '↑ Push'}
+          </button>
+        </div>
       </div>
     </div>
   );
