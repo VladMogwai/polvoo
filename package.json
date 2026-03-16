@@ -7,6 +7,8 @@
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "dist": "vite build && electron-builder",
+    "release": "./release.sh",
+    "release:fast": "./release-fast.sh",
     "postinstall": "electron-rebuild -f -w node-pty"
   },
   "build": {
