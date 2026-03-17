@@ -1,6 +1,7 @@
 'use strict';
 
 const { contextBridge, ipcRenderer } = require('electron');
+const pkg = require('../package.json');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Projects
@@ -8,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addProject: (data) => ipcRenderer.invoke('projects:add', data),
   removeProject: (id) => ipcRenderer.invoke('projects:remove', id),
   updateProject: (id, updates) => ipcRenderer.invoke('projects:update', id, updates),
+  reorderProjects: (orderedIds) => ipcRenderer.invoke('projects:reorder', orderedIds),
 
   // Process management
   startProcess: (id) => ipcRenderer.invoke('process:start', id),
@@ -51,6 +53,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (updates) => ipcRenderer.invoke('settings:set', updates),
+
+  // Dev rebuild
+  rebuildInstall: () => ipcRenderer.invoke('dev:rebuild-install'),
+
+  // Dock badge
+  setBadgeCount: (count) => ipcRenderer.invoke('app:set-badge-count', count),
 
   // Dialog
   openFolderDialog: () => ipcRenderer.invoke('dialog:open-folder'),
@@ -112,12 +120,44 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Environment vars
   envLoad: (projectId) => ipcRenderer.invoke('env:load', projectId),
+  envSave: (projectId, vars) => ipcRenderer.invoke('env:save', projectId, vars),
   envWatch: (projectId) => ipcRenderer.invoke('env:watch', projectId),
   envUnwatch: (projectId) => ipcRenderer.invoke('env:unwatch', projectId),
+  envScan: (projectId) => ipcRenderer.invoke('env:scan', projectId),
+  envSaveFile: (projectId, absolutePath, vars) => ipcRenderer.invoke('env:save-file', projectId, absolutePath, vars),
+  envCreateFile: (projectId, relativePath) => ipcRenderer.invoke('env:create-file', projectId, relativePath),
   onEnvUpdated: (callback) => {
     const handler = (_, payload) => callback(payload);
     ipcRenderer.on('env:updated', handler);
     return () => ipcRenderer.removeListener('env:updated', handler);
+  },
+
+  // Docker
+  checkDockerAvailable: () => ipcRenderer.invoke('docker:check'),
+  getDockerContainers: () => ipcRenderer.invoke('docker:list-containers'),
+  getProjectContainers: (projectPath) => ipcRenderer.invoke('docker:project-containers', projectPath),
+  dockerHasCompose: (projectPath) => ipcRenderer.invoke('docker:has-compose', projectPath),
+  dockerStart: (id) => ipcRenderer.invoke('docker:start', id),
+  dockerStop: (id) => ipcRenderer.invoke('docker:stop', id),
+  dockerRestart: (id) => ipcRenderer.invoke('docker:restart', id),
+  getContainerLogs: (id) => ipcRenderer.invoke('docker:logs', id),
+  onDockerUpdate: (callback) => {
+    const handler = (_, payload) => callback(payload);
+    ipcRenderer.on('docker:update', handler);
+    return () => ipcRenderer.removeListener('docker:update', handler);
+  },
+
+  // App info
+  appVersion: pkg.version,
+
+  // Auto-updater
+  checkForUpdates: () => ipcRenderer.invoke('updater:check'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  installUpdate: () => ipcRenderer.invoke('updater:install'),
+  onUpdaterStatus: (callback) => {
+    const handler = (_, payload) => callback(payload);
+    ipcRenderer.on('updater:status', handler);
+    return () => ipcRenderer.removeListener('updater:status', handler);
   },
 
   // Pinned commands

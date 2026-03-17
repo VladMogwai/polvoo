@@ -1,0 +1,4 @@
+owner: VladMogwai
+repo: dev-dashboard
+provider: github
+updaterCacheDirName: dev-dashboard-updater

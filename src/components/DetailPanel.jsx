@@ -5,6 +5,8 @@ import BranchSwitcher from './BranchSwitcher';
 import TerminalMenu from './TerminalMenu';
 import GitHistoryTab from './git/GitHistoryTab';
 import PortBadge from './PortBadge';
+import DockerPanel from './DockerPanel';
+import EnvViewer from './terminal/EnvViewer';
 import { useProcess } from '../hooks/useProcess';
 import {
   getInstalledEditors,
@@ -61,7 +63,7 @@ const STATUS_TEXT = {
 };
 const STATUS_LABELS = { running: 'Running', stopped: 'Stopped', error: 'Error' };
 
-export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
+export default function DetailPanel({ project, gitInfo, onClose, onRemove, errorCount = 0, onLogsViewed, onLogsHidden, isActive = true }) {
   const [activeTab, setActiveTab] = useState('Logs');
   const [installedEditors, setInstalledEditors] = useState([]);
   const [runningEditors, setRunningEditors] = useState([]);
@@ -88,10 +90,15 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
     return () => { cancelled = true; clearInterval(t); };
   }, [project.path]);
 
-  // Reset to Logs tab whenever project changes
+  // Track whether errors are being viewed — fires when this panel becomes active/inactive
+  // or when the user switches tabs within it
   useEffect(() => {
-    setActiveTab('Logs');
-  }, [project.id]);
+    if (isActive && activeTab === 'Logs') {
+      onLogsViewed?.(project.id);
+    } else {
+      onLogsHidden?.(project.id);
+    }
+  }, [isActive, activeTab, project.id]);
 
   function handleTabChange(tab) {
     setActiveTab(tab);
@@ -205,11 +212,11 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
 
       {/* ── Tabs ─────────────────────────────────────────────── */}
       <div className="flex items-center border-b border-slate-700/60 px-4 flex-shrink-0">
-        {['Logs', 'Terminal', 'Git'].map((tab) => (
+        {['Logs', 'Terminal', 'Git', 'Env', 'Docker'].map((tab) => (
           <button
             key={tab}
             onClick={() => handleTabChange(tab)}
-            className={`px-3 py-2.5 text-xs font-medium border-b-2 -mb-px transition-colors ${
+            className={`relative px-3 py-2.5 text-xs font-medium border-b-2 -mb-px transition-colors ${
               activeTab === tab
                 ? 'border-violet-500 text-violet-400'
                 : 'border-transparent text-slate-500 hover:text-slate-300'
@@ -219,6 +226,11 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
             {tab === 'Logs' && logs.length > 0 && (
               <span className="ml-1.5 px-1.5 py-0.5 bg-slate-700 rounded text-slate-400 text-[10px]">
                 {logs.length > 999 ? '999+' : logs.length}
+              </span>
+            )}
+            {tab === 'Logs' && errorCount > 0 && activeTab !== 'Logs' && (
+              <span className="ml-1.5 px-1.5 py-0.5 bg-red-600/80 rounded text-white text-[10px] font-semibold">
+                {errorCount > 99 ? '99+' : errorCount}
               </span>
             )}
           </button>
@@ -259,7 +271,6 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
           style={{ minHeight: 0 }}
         >
           <Terminal
-            key={project.id + '-terminal'}
             projectId={project.id}
             project={project}
             type="terminal"
@@ -273,6 +284,18 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove }) {
             project={project}
             active={activeTab === 'Git'}
           />
+        </div>
+
+        {/* Env tab */}
+        <div className={`h-full ${activeTab === 'Env' ? 'flex flex-col' : 'hidden'}`}>
+          {activeTab === 'Env' && (
+            <EnvViewer projectId={project.id} onClose={() => handleTabChange('Logs')} />
+          )}
+        </div>
+
+        {/* Docker tab */}
+        <div className={`h-full ${activeTab === 'Docker' ? 'flex flex-col' : 'hidden'}`}>
+          {activeTab === 'Docker' && <DockerPanel project={project} />}
         </div>
       </div>
     </div>

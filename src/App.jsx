@@ -3,21 +3,35 @@ import ProjectGrid from './components/ProjectGrid';
 import DetailPanel from './components/DetailPanel';
 import AddProjectModal from './components/AddProjectModal';
 import ProcessMonitor from './components/ProcessMonitor';
+import UpdateModal from './components/UpdateModal';
 import { useProjects } from './hooks/useProjects';
-import { onProcessStatusUpdate } from './ipc';
+import {
+  onProcessStatusUpdate, rebuildInstall, onLogOutput, setBadgeCount,
+  onUpdaterStatus, checkForUpdates, downloadUpdate, installUpdate, getAppVersion,
+} from './ipc';
 
 const MIN_PANEL_WIDTH = 360;
 const MAX_PANEL_WIDTH = 860;
 const DEFAULT_PANEL_WIDTH = 460;
 
 export default function App() {
-  const { projects, gitInfo, loading, addProject, removeProject, updateProjectStatus } = useProjects();
+  const { projects, gitInfo, loading, addProject, removeProject, updateProject, updateProjectStatus, reorderProjects } = useProjects();
   const [selectedProject, setSelectedProject] = useState(null);
+  const [initializedIds, setInitializedIds] = useState(() => new Set());
   const [showAddModal, setShowAddModal] = useState(false);
   const [showMonitor, setShowMonitor] = useState(false);
   const [runningCount, setRunningCount] = useState(0);
   const [xcodeBannerVisible, setXcodeBannerVisible] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
+  const [errorCounts, setErrorCounts] = useState({});
+  const viewingLogsForRef = useRef(null);
+  const [updateStatus, setUpdateStatus] = useState(null); // { state, version?, percent? }
+  const [updateDismissed, setUpdateDismissed] = useState(false); // dismisses "available" banner
+  const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const updateStatusRef = useRef(null);   // mirrors updateStatus but readable inside timers
+  const snoozedUntilRef = useRef(null);   // timestamp: when snooze expires
+  const snoozeTimerRef = useRef(null);    // setTimeout handle
+  const appVersion = getAppVersion();
   const dragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
@@ -25,6 +39,15 @@ export default function App() {
   const liveSelected = selectedProject
     ? projects.find((p) => p.id === selectedProject.id) || null
     : null;
+
+  // Track which project IDs have ever been opened so we can keep their panels alive
+  useEffect(() => {
+    if (!liveSelected?.id) return;
+    setInitializedIds((prev) => {
+      if (prev.has(liveSelected.id)) return prev;
+      return new Set([...prev, liveSelected.id]);
+    });
+  }, [liveSelected?.id]);
 
   // Track running count for the Processes badge
   useEffect(() => {
@@ -39,6 +62,66 @@ export default function App() {
       else setRunningCount((n) => Math.max(0, n - 1));
     });
     return () => unsub();
+  }, []);
+
+  // Track error lines globally for badge counts
+  const ERROR_RE = /error|exception|fatal|failed|crash/i;
+  useEffect(() => {
+    const unsub = onLogOutput(({ projectId, type, data }) => {
+      if (projectId === viewingLogsForRef.current) return;
+      const isError = type === 'stderr' || ERROR_RE.test(data);
+      if (!isError) return;
+      setErrorCounts((prev) => {
+        const next = { ...prev, [projectId]: (prev[projectId] || 0) + 1 };
+        const total = Object.values(next).reduce((a, b) => a + b, 0);
+        setBadgeCount(total);
+        return next;
+      });
+    });
+    return unsub;
+  }, []);
+
+  // Subscribe to auto-updater status events
+  useEffect(() => {
+    const unsub = onUpdaterStatus((status) => {
+      setUpdateStatus(status);
+      updateStatusRef.current = status;
+
+      if (status.state === 'available') {
+        // New version found — reset the "available" banner dismissal
+        setUpdateDismissed(false);
+      }
+
+      if (status.state === 'downloaded') {
+        // Show confirmation modal unless the user snoozed within the last hour
+        const now = Date.now();
+        if (!snoozedUntilRef.current || now >= snoozedUntilRef.current) {
+          setShowUpdateModal(true);
+        }
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Snooze helpers
+  function handleSnoozeModal() {
+    setShowUpdateModal(false);
+    const expiresAt = Date.now() + 60 * 60 * 1000; // 1 hour
+    snoozedUntilRef.current = expiresAt;
+    if (snoozeTimerRef.current) clearTimeout(snoozeTimerRef.current);
+    snoozeTimerRef.current = setTimeout(() => {
+      snoozedUntilRef.current = null;
+      if (updateStatusRef.current?.state === 'downloaded') {
+        setShowUpdateModal(true);
+      }
+    }, 60 * 60 * 1000);
+  }
+
+  // Clean up snooze timer on unmount
+  useEffect(() => {
+    return () => {
+      if (snoozeTimerRef.current) clearTimeout(snoozeTimerRef.current);
+    };
   }, []);
 
   // Listen for Xcode CLT missing notification from main process
@@ -80,9 +163,31 @@ export default function App() {
     };
   }, []);
 
+  function handleLogsViewed(projectId) {
+    viewingLogsForRef.current = projectId;
+    setErrorCounts((prev) => {
+      if (!prev[projectId]) return prev;
+      const next = { ...prev, [projectId]: 0 };
+      const total = Object.values(next).reduce((a, b) => a + b, 0);
+      setBadgeCount(total);
+      return next;
+    });
+  }
+
+  function handleLogsHidden(projectId) {
+    if (viewingLogsForRef.current === projectId) {
+      viewingLogsForRef.current = null;
+    }
+  }
+
   async function handleRemoveProject(id) {
     await removeProject(id);
     if (selectedProject?.id === id) setSelectedProject(null);
+    setInitializedIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
   }
 
   if (loading) {
@@ -99,8 +204,76 @@ export default function App() {
     );
   }
 
+  // Banner: shown for "available" (unless dismissed) and "downloading" states
+  // "downloaded" state is handled by the modal; when snoozed it shows a mini badge
+  const showAvailableBanner = !updateDismissed && updateStatus?.state === 'available';
+  const showDownloadingBanner = updateStatus?.state === 'downloading';
+  const showDownloadedBadge = updateStatus?.state === 'downloaded' && !showUpdateModal;
+  const showBanner = showAvailableBanner || showDownloadingBanner || showDownloadedBadge;
+
+  const BANNER_STYLE = {
+    flexShrink: 0,
+    background: 'rgba(109,40,217,0.12)',
+    borderBottom: '1px solid rgba(139,92,246,0.25)',
+    padding: '5px 16px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    fontSize: 12,
+    color: '#c4b5fd',
+  };
+
   return (
     <div className="w-full h-full flex flex-col overflow-hidden bg-slate-900">
+      {/* Auto-update banner */}
+      {showBanner && (
+        <div style={BANNER_STYLE}>
+          {showAvailableBanner && (
+            <>
+              <svg style={{ width: 13, height: 13, flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span style={{ flex: 1 }}>Update available: v{updateStatus.version}</span>
+              <button
+                onClick={() => downloadUpdate()}
+                style={{ padding: '2px 10px', background: 'rgba(139,92,246,0.25)', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 4, color: '#ddd6fe', fontSize: 11, cursor: 'pointer' }}
+              >
+                Download
+              </button>
+              <button onClick={() => setUpdateDismissed(true)} style={{ padding: '2px 8px', background: 'transparent', border: 'none', color: '#7c3aed', fontSize: 11, cursor: 'pointer' }}>✕</button>
+            </>
+          )}
+          {showDownloadingBanner && (
+            <>
+              <svg className="animate-spin" style={{ width: 13, height: 13, flexShrink: 0 }} viewBox="0 0 24 24" fill="none">
+                <circle style={{ opacity: 0.25 }} cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path style={{ opacity: 0.75 }} fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+              </svg>
+              <span style={{ flex: 1 }}>Downloading update… {updateStatus.percent ?? 0}%</span>
+              <div style={{ width: 100, height: 4, background: 'rgba(139,92,246,0.2)', borderRadius: 2, overflow: 'hidden' }}>
+                <div style={{ width: `${updateStatus.percent ?? 0}%`, height: '100%', background: '#8b5cf6', borderRadius: 2, transition: 'width 300ms' }} />
+              </div>
+            </>
+          )}
+          {showDownloadedBadge && (
+            <>
+              <svg style={{ width: 13, height: 13, flexShrink: 0 }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span style={{ flex: 1 }}>
+                v{updateStatus.version} ready to install
+              </span>
+              <button
+                onClick={() => setShowUpdateModal(true)}
+                style={{ padding: '2px 10px', background: 'rgba(139,92,246,0.25)', border: '1px solid rgba(139,92,246,0.4)', borderRadius: 4, color: '#ddd6fe', fontSize: 11, cursor: 'pointer' }}
+              >
+                Install now
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Xcode CLT warning banner */}
       {xcodeBannerVisible && (
         <div
@@ -168,10 +341,14 @@ export default function App() {
             selectedProject={liveSelected}
             onSelect={setSelectedProject}
             onStatusChange={updateProjectStatus}
+            onUpdateProject={updateProject}
             onAddProject={() => setShowAddModal(true)}
             onRemove={handleRemoveProject}
+            onReorder={reorderProjects}
             onOpenMonitor={() => setShowMonitor(true)}
+            onRebuildInstall={rebuildInstall}
             runningCount={runningCount}
+            updateState={updateStatus?.state}
           />
         </div>
 
@@ -232,23 +409,43 @@ export default function App() {
           </div>
         )}
 
-        {/* Right pane — detail panel */}
+        {/* Right pane — detail panels (all initialized panels kept alive, show/hide via CSS) */}
         <div
-          className="flex-shrink-0 overflow-hidden flex flex-col border-l border-slate-700/60"
+          className="flex-shrink-0 overflow-hidden border-l border-slate-700/60"
           style={{
             width: liveSelected ? panelWidth : 0,
             transition: dragging.current ? 'none' : 'width 180ms ease',
             minWidth: 0,
+            position: 'relative',
           }}
         >
-          {liveSelected && (
-            <DetailPanel
-              project={liveSelected}
-              gitInfo={gitInfo[liveSelected.id]}
-              onClose={() => setSelectedProject(null)}
-              onRemove={handleRemoveProject}
-            />
-          )}
+          {[...initializedIds].map((id) => {
+            const p = projects.find((proj) => proj.id === id);
+            if (!p) return null;
+            const isActive = liveSelected?.id === id;
+            return (
+              <div
+                key={id}
+                style={{
+                  display: isActive ? 'flex' : 'none',
+                  flexDirection: 'column',
+                  height: '100%',
+                  overflow: 'hidden',
+                }}
+              >
+                <DetailPanel
+                  project={p}
+                  gitInfo={gitInfo[p.id]}
+                  onClose={() => setSelectedProject(null)}
+                  onRemove={handleRemoveProject}
+                  errorCount={errorCounts[p.id] || 0}
+                  onLogsViewed={handleLogsViewed}
+                  onLogsHidden={handleLogsHidden}
+                  isActive={isActive}
+                />
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -261,6 +458,14 @@ export default function App() {
 
       {showMonitor && (
         <ProcessMonitor onClose={() => setShowMonitor(false)} />
+      )}
+
+      {showUpdateModal && updateStatus?.state === 'downloaded' && (
+        <UpdateModal
+          version={updateStatus.version}
+          onInstall={() => installUpdate()}
+          onDismiss={handleSnoozeModal}
+        />
       )}
     </div>
   );

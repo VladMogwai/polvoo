@@ -4,6 +4,8 @@ import {
   getGitInfo,
   addProject as ipcAddProject,
   removeProject as ipcRemoveProject,
+  reorderProjects as ipcReorderProjects,
+  updateProject as ipcUpdateProject,
   onProcessStatusUpdate,
   onGitUpdate,
 } from '../ipc';
@@ -74,5 +76,26 @@ export function useProjects() {
     );
   }, []);
 
-  return { projects, gitInfo, loading, addProject, removeProject, updateProjectStatus, refresh };
+  const updateProject = useCallback(async (id, updates) => {
+    const updated = await ipcUpdateProject(id, updates);
+    if (updated) {
+      setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, ...updates } : p)));
+    }
+    return updated;
+  }, []);
+
+  const reorderProjects = useCallback((orderedIds) => {
+    setProjects((prev) => {
+      const map = new Map(prev.map((p) => [p.id, p]));
+      const reordered = orderedIds.map((id) => map.get(id)).filter(Boolean);
+      const reorderedSet = new Set(orderedIds);
+      for (const p of prev) {
+        if (!reorderedSet.has(p.id)) reordered.push(p);
+      }
+      return reordered;
+    });
+    ipcReorderProjects(orderedIds);
+  }, []);
+
+  return { projects, gitInfo, loading, addProject, removeProject, updateProject, updateProjectStatus, reorderProjects, refresh };
 }

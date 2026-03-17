@@ -11,6 +11,8 @@ const execAsync = promisify(exec);
 const processManager = require('./processes');
 const ptyManager = require('./pty');
 const gitManager = require('./git');
+const dockerManager = require('./docker');
+const updater = require('./updater');
 const editorManager = require('./editors');
 const terminalManager = require('./terminals');
 const settings = require('./settings');
@@ -23,6 +25,8 @@ let mainWindow = null;
 let projectsFilePath = null;
 let projects = [];
 let gitPollTimer = null;
+let dockerPollTimer = null;
+let dockerAvailable = false;
 
 // ─── Persistence ─────────────────────────────────────────────────────────────
 
@@ -107,6 +111,23 @@ function startGitPolling() {
   gitPollTimer = setInterval(pollGit, 5000);
 }
 
+// ─── Docker polling ───────────────────────────────────────────────────────────
+
+async function pollDocker() {
+  if (!dockerAvailable) return;
+  try {
+    const containers = await dockerManager.listContainers();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('docker:update', { containers });
+    }
+  } catch {}
+}
+
+function startDockerPolling() {
+  pollDocker();
+  dockerPollTimer = setInterval(pollDocker, 5000);
+}
+
 // ─── App lifecycle ────────────────────────────────────────────────────────────
 
 app.whenReady().then(() => {
@@ -115,6 +136,15 @@ app.whenReady().then(() => {
   settings.load();
   createWindow();
   startGitPolling();
+
+  // Initialize auto-updater (after window is ready)
+  updater.init(mainWindow, isDev);
+
+  // Start Docker polling if Docker is available
+  dockerManager.checkAvailable().then((available) => {
+    dockerAvailable = available;
+    if (available) startDockerPolling();
+  });
 
   // Check Xcode CLT asynchronously after window is created
   setTimeout(async () => {
@@ -179,6 +209,8 @@ app.on('before-quit', async (event) => {
   }
 
   if (gitPollTimer) clearInterval(gitPollTimer);
+  if (dockerPollTimer) clearInterval(dockerPollTimer);
+  updater.destroy();
   ptyManager.destroyAll();
 
   if (shouldKill) {
@@ -239,6 +271,19 @@ ipcMain.handle('projects:update', (_, projectId, updates) => {
     return projects[idx];
   }
   return null;
+});
+
+ipcMain.handle('projects:reorder', (_, orderedIds) => {
+  const map = new Map(projects.map((p) => [p.id, p]));
+  const reordered = orderedIds.map((id) => map.get(id)).filter(Boolean);
+  // append any projects not in the orderedIds list (safety)
+  const reorderedSet = new Set(orderedIds);
+  for (const p of projects) {
+    if (!reorderedSet.has(p.id)) reordered.push(p);
+  }
+  projects = reordered;
+  saveProjects();
+  return true;
 });
 
 ipcMain.handle('projects:get-scripts', (_, projectId) => {
@@ -551,6 +596,63 @@ ipcMain.handle('env:unwatch', (_, projectId) => {
   if (w) { try { w.close(); } catch {} envWatchers.delete(projectId); }
 });
 
+ipcMain.handle('env:save', (_, projectId, vars) => {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return { success: false, error: 'Project not found' };
+  let filePath;
+  if (project.envFile) {
+    filePath = path.isAbsolute(project.envFile)
+      ? project.envFile
+      : path.join(project.path, project.envFile);
+  } else {
+    filePath = path.join(project.path, '.env');
+  }
+  try {
+    const content = vars.map(({ key, value }) => `${key}=${value}`).join('\n') + '\n';
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('env:scan', (_, projectId) => {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return [];
+  try {
+    return envLoader.scanEnvFiles(project.path);
+  } catch (err) {
+    console.error('[env:scan] scan failed for', project.path, err);
+    return [];
+  }
+});
+
+ipcMain.handle('env:save-file', (_, projectId, absolutePath, vars) => {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return { success: false, error: 'Project not found' };
+  if (!absolutePath.startsWith(project.path)) {
+    return { success: false, error: 'Path outside project directory' };
+  }
+  try {
+    envLoader.saveEnvFile(absolutePath, vars);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('env:create-file', (_, projectId, relativePath) => {
+  const project = projects.find(p => p.id === projectId);
+  if (!project) return { success: false, error: 'Project not found' };
+  try {
+    const abs = path.join(project.path, relativePath);
+    envLoader.createEnvFile(abs);
+    return { success: true, absolutePath: abs };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 // ─── IPC: Pinned commands ─────────────────────────────────────────────────────
 
 ipcMain.handle('pins:add', (_, projectId, command) => {
@@ -673,6 +775,81 @@ ipcMain.handle('terminals:add-custom', (_, terminal) => {
 
 ipcMain.handle('terminals:remove-custom', (_, id) => {
   return settings.removeCustomTerminal(id);
+});
+
+// ─── IPC: Docker ──────────────────────────────────────────────────────────────
+
+ipcMain.handle('docker:check', async () => {
+  const available = await dockerManager.checkAvailable();
+  dockerAvailable = available;
+  if (available && !dockerPollTimer) startDockerPolling();
+  return available;
+});
+
+ipcMain.handle('docker:list-containers', () => {
+  return dockerManager.listContainers();
+});
+
+ipcMain.handle('docker:project-containers', (_, projectPath) => {
+  return dockerManager.getProjectContainers(projectPath);
+});
+
+ipcMain.handle('docker:has-compose', (_, projectPath) => {
+  return dockerManager.hasComposeFile(projectPath);
+});
+
+ipcMain.handle('docker:start', async (_, id) => {
+  try {
+    await dockerManager.startContainer(id);
+    pollDocker();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.stderr || err.message };
+  }
+});
+
+ipcMain.handle('docker:stop', async (_, id) => {
+  try {
+    await dockerManager.stopContainer(id);
+    pollDocker();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.stderr || err.message };
+  }
+});
+
+ipcMain.handle('docker:restart', async (_, id) => {
+  try {
+    await dockerManager.restartContainer(id);
+    pollDocker();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.stderr || err.message };
+  }
+});
+
+ipcMain.handle('docker:logs', (_, id) => {
+  return dockerManager.getLogs(id);
+});
+
+// ─── IPC: Dock badge ──────────────────────────────────────────────────────────
+
+ipcMain.handle('app:set-badge-count', (_, count) => {
+  app.setBadgeCount(count || 0);
+});
+
+// ─── IPC: Dev rebuild & install ───────────────────────────────────────────────
+
+ipcMain.handle('dev:rebuild-install', () => {
+  const { spawn } = require('child_process');
+  const scriptPath = path.join(__dirname, '..', 'dev-install.sh');
+  const child = spawn('bash', [scriptPath], {
+    cwd: path.join(__dirname, '..'),
+    detached: true,
+    stdio: 'ignore',
+  });
+  child.unref();
+  return { success: true };
 });
 
 // ─── IPC: Dialog ──────────────────────────────────────────────────────────────

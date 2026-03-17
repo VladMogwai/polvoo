@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useRef } from 'react';
 import ProjectTile from './ProjectTile';
+import { getAppVersion, checkForUpdates } from '../ipc';
 
 export default function ProjectGrid({
   projects,
@@ -7,11 +8,20 @@ export default function ProjectGrid({
   selectedProject,
   onSelect,
   onStatusChange,
+  onUpdateProject,
   onAddProject,
   onRemove,
+  onReorder,
   onOpenMonitor,
+  onRebuildInstall,
   runningCount,
+  updateState,
 }) {
+  const [rebuilding, setRebuilding] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const appVersion = getAppVersion();
+  const [dragOverId, setDragOverId] = useState(null);
+  const dragIdRef = useRef(null);
   return (
     <div className="flex flex-col h-full">
       {/* Titlebar — only the empty strip is draggable, not the buttons */}
@@ -33,6 +43,27 @@ export default function ProjectGrid({
           <span className="text-xs text-slate-500 ml-1">
             {projects.length} project{projects.length !== 1 ? 's' : ''}
           </span>
+          {appVersion && (
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                if (checking) return;
+                setChecking(true);
+                await checkForUpdates();
+                setTimeout(() => setChecking(false), 3000);
+              }}
+              title={checking ? 'Checking for updates…' : 'Check for updates'}
+              style={{ WebkitAppRegion: 'no-drag' }}
+              className="ml-1 text-[10px] text-slate-700 hover:text-slate-500 transition-colors select-none"
+            >
+              {updateState === 'available' || updateState === 'downloaded'
+                ? <span className="text-violet-500">↑ update</span>
+                : checking
+                  ? <span className="text-slate-600">checking…</span>
+                  : `v${appVersion}`
+              }
+            </button>
+          )}
         </div>
 
         {/* Spacer fills the drag region */}
@@ -40,6 +71,30 @@ export default function ProjectGrid({
 
         {/* Buttons — must opt out of drag */}
         <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' }}>
+          {/* Rebuild & install */}
+          {onRebuildInstall && (
+            <button
+              onClick={async () => {
+                setRebuilding(true);
+                await onRebuildInstall();
+                // App will be killed by the script — no need to reset state
+              }}
+              disabled={rebuilding}
+              title="Rebuild & install (dev-install.sh)"
+              className="flex items-center justify-center w-7 h-7 bg-slate-800 hover:bg-amber-600/20 text-slate-500 hover:text-amber-400 rounded-lg border border-slate-700 hover:border-amber-600/40 transition-colors disabled:opacity-40"
+            >
+              {rebuilding ? (
+                <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                </svg>
+              ) : (
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
+                </svg>
+              )}
+            </button>
+          )}
           {/* Process monitor button */}
           <button
             onClick={onOpenMonitor}
@@ -89,19 +144,65 @@ export default function ProjectGrid({
           </div>
         ) : (
           <div
-            className="grid gap-3"
-            style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}
+            className="grid"
+            style={{
+              gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+              gridTemplateRows: 'masonry', // progressive enhancement — Firefox 87+
+              alignItems: 'start',         // fallback: top-align cards, no height stretching
+              gap: 12,
+            }}
           >
             {projects.map((project) => (
-              <ProjectTile
+              <div
                 key={project.id}
-                project={project}
-                gitInfo={gitInfo[project.id]}
-                isSelected={selectedProject?.id === project.id}
-                onSelect={onSelect}
-                onStatusChange={onStatusChange}
-                onRemove={onRemove}
-              />
+                draggable
+                onDragStart={(e) => {
+                  dragIdRef.current = project.id;
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragEnd={() => {
+                  dragIdRef.current = null;
+                  setDragOverId(null);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  if (dragIdRef.current && dragIdRef.current !== project.id) {
+                    setDragOverId(project.id);
+                  }
+                }}
+                onDragLeave={() => setDragOverId(null)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const fromId = dragIdRef.current;
+                  if (!fromId || fromId === project.id) return;
+                  const ids = projects.map((p) => p.id);
+                  const fromIdx = ids.indexOf(fromId);
+                  const toIdx = ids.indexOf(project.id);
+                  const reordered = [...ids];
+                  reordered.splice(fromIdx, 1);
+                  reordered.splice(toIdx, 0, fromId);
+                  setDragOverId(null);
+                  onReorder?.(reordered);
+                }}
+                style={{
+                  opacity: dragIdRef.current === project.id ? 0.4 : 1,
+                  outline: dragOverId === project.id ? '2px solid rgba(139,92,246,0.6)' : 'none',
+                  borderRadius: 12,
+                  transition: 'opacity 120ms',
+                  cursor: 'grab',
+                }}
+              >
+                <ProjectTile
+                  project={project}
+                  gitInfo={gitInfo[project.id]}
+                  isSelected={selectedProject?.id === project.id}
+                  onSelect={onSelect}
+                  onStatusChange={onStatusChange}
+                  onUpdateProject={onUpdateProject}
+                  onRemove={onRemove}
+                />
+              </div>
             ))}
           </div>
         )}

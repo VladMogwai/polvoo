@@ -29,6 +29,7 @@ git push origin "v$VERSION"
 echo "📤 Uploading to GitHub Release..."
 gh release create "v$VERSION" \
   "$ARM64_FILE" \
+  "dist/latest-mac.yml" \
   --title "Dev Dashboard $VERSION" \
   --notes "Release v$VERSION (Apple Silicon)"
 

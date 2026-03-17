@@ -36,6 +36,7 @@ echo "📤 Uploading to GitHub Release..."
 gh release create "v$VERSION" \
   "$ARM64_FILE" \
   "$X64_FILE" \
+  "dist/latest-mac.yml" \
   --title "Dev Dashboard $VERSION" \
   --notes "Release v$VERSION"
 

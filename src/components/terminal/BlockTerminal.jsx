@@ -4,7 +4,6 @@ import PinnedCommands from './PinnedCommands';
 import CommandPalette from './CommandPalette';
 import TerminalToolbar from './TerminalToolbar';
 import HistoryDropdown from './HistoryDropdown';
-import EnvViewer from './EnvViewer';
 import StickyHeader from './StickyHeader';
 import {
   historyGet, historyAdd, historyDelete,
@@ -23,7 +22,6 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyAnchorRef, setHistoryAnchorRef] = useState(null);
-  const [envOpen, setEnvOpen] = useState(false);
 
   // Context menu
   const [menu, setMenu] = useState({ visible: false, x: 0, y: 0 });
@@ -59,16 +57,6 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
       }).catch(() => {});
     }
   }, [projectId, projectProp]);
-
-  // ── Re-fit only when env panel opens/closes (changes layout height) ─────────
-  // NOTE: useTerminal already handles fit on `active` change — don't duplicate it here
-  const prevEnvOpen = React.useRef(envOpen);
-  useEffect(() => {
-    if (prevEnvOpen.current !== envOpen) {
-      prevEnvOpen.current = envOpen;
-      if (active) fit();
-    }
-  }, [envOpen, active, fit]);
 
   // Dispose on unmount
   useEffect(() => {
@@ -156,10 +144,6 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
     setHistoryOpen((v) => !v);
   }
 
-  function handleToggleEnv() {
-    setEnvOpen((v) => !v);
-  }
-
   // ── Context menu ──────────────────────────────────────────────────────────
 
   const handleContextMenu = useCallback((e) => {
@@ -193,9 +177,7 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
       <TerminalToolbar
         onOpenPalette={() => setPaletteOpen(true)}
         onToggleHistory={handleToggleHistory}
-        onToggleEnv={handleToggleEnv}
         historyOpen={historyOpen}
-        envOpen={envOpen}
         historyCount={history.length}
       />
 
@@ -222,12 +204,6 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
           }}
         />
 
-        {/* Env viewer panel (slides in from bottom) */}
-        {envOpen && (
-          <div style={{ height: 220, flexShrink: 0 }}>
-            <EnvViewer projectId={projectId} onClose={() => setEnvOpen(false)} />
-          </div>
-        )}
       </div>
 
       {/* Command Palette overlay */}

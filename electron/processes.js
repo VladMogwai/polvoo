@@ -1,6 +1,7 @@
 'use strict';
 
 const { spawn } = require('child_process');
+const { Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -121,10 +122,19 @@ function start(project, onData, onStatusChange) {
   child.on('close', (code, signal) => {
     const wasRunning = running.get(project.id);
     if (wasRunning) {
+      const isCrash = code !== 0 && code !== null && signal !== 'SIGTERM' && signal !== 'SIGKILL';
       const status = code === 0 ? 'stopped' : (signal === 'SIGTERM' || signal === 'SIGKILL') ? 'stopped' : 'error';
       onData('stdout', `\n[Process exited with code ${code}${signal ? ` (${signal})` : ''}]\n`);
       running.set(project.id, { ...wasRunning, status, process: null });
       onStatusChange(status);
+      if (isCrash) {
+        try {
+          new Notification({
+            title: 'Process crashed',
+            body: `${project.name}: "${project.startCommand}" exited with code ${code}`,
+          }).show();
+        } catch (_) {}
+      }
     }
   });
 }

@@ -6,6 +6,7 @@ export const getProjects = () => api.getProjects();
 export const addProject = (data) => api.addProject(data);
 export const removeProject = (id) => api.removeProject(id);
 export const updateProject = (id, updates) => api.updateProject(id, updates);
+export const reorderProjects = (orderedIds) => api.reorderProjects(orderedIds);
 
 export const startProcess = (id) => api.startProcess(id);
 export const stopProcess = (id) => api.stopProcess(id);
@@ -34,6 +35,8 @@ export const destroyPty = (sessionId) => api.destroyPty(sessionId);
 export const checkClaude = () => api.checkClaude();
 export const openClaudeExternal = (path) => api.openClaudeExternal(path);
 export const openFolderDialog = () => api.openFolderDialog();
+export const rebuildInstall = () => api.rebuildInstall();
+export const setBadgeCount = (count) => api.setBadgeCount(count);
 
 export const getInstalledTerminals = () => api.getInstalledTerminals();
 export const openInTerminal = (terminalId, path) => api.openInTerminal(terminalId, path);
@@ -71,10 +74,30 @@ export const historyDelete = (id, cmd) => api.historyDelete(id, cmd);
 export const historyClear = (id) => api.historyClear(id);
 
 export const envLoad = (id) => api.envLoad(id);
+export const envSave = (id, vars) => api.envSave(id, vars);
 export const envWatch = (id) => api.envWatch(id);
 export const envUnwatch = (id) => api.envUnwatch(id);
+export const envScan = (id) => api.envScan(id);
+export const envSaveFile = (id, absPath, vars) => api.envSaveFile(id, absPath, vars);
+export const envCreateFile = (id, relPath) => api.envCreateFile(id, relPath);
 export const onEnvUpdated = (cb) => api.onEnvUpdated(cb);
 
 export const pinsAdd = (id, cmd) => api.pinsAdd(id, cmd);
 export const pinsRemove = (id, cmd) => api.pinsRemove(id, cmd);
 export const pinsReorder = (id, cmds) => api.pinsReorder(id, cmds);
+
+export const checkDockerAvailable = () => api.checkDockerAvailable();
+export const getDockerContainers = () => api.getDockerContainers();
+export const getProjectContainers = (projectPath) => api.getProjectContainers(projectPath);
+export const dockerHasCompose = (projectPath) => api.dockerHasCompose(projectPath);
+export const dockerStart = (id) => api.dockerStart(id);
+export const dockerStop = (id) => api.dockerStop(id);
+export const dockerRestart = (id) => api.dockerRestart(id);
+export const getContainerLogs = (id) => api.getContainerLogs(id);
+export const onDockerUpdate = (cb) => api.onDockerUpdate(cb);
+
+export const getAppVersion = () => api.appVersion;
+export const checkForUpdates = () => api.checkForUpdates();
+export const downloadUpdate = () => api.downloadUpdate();
+export const installUpdate = () => api.installUpdate();
+export const onUpdaterStatus = (cb) => api.onUpdaterStatus(cb);
