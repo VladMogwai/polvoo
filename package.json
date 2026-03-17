@@ -1,6 +1,6 @@
 {
   "name": "polvoo",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Developer Project Dashboard — like Docker Desktop for local dev projects",
   "license": "MIT WITH Commons-Clause",
   "main": "electron/main.js",
