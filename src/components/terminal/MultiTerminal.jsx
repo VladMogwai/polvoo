@@ -250,7 +250,7 @@ export default function MultiTerminal({ projectId, project, type, active }) {
               <BlockTerminal
                 projectId={projectId}
                 project={project}
-                type={type}
+                type={`${type}-${tab.id}`}
                 active={active && isVisible}
               />
             </div>
