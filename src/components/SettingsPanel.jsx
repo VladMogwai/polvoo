@@ -68,6 +68,13 @@ export default function SettingsPanel({ onClose }) {
     loadGeneral();
   }, []);
 
+  // Auto-refresh permissions when the window regains focus (e.g. user
+  // switched to System Preferences and came back).
+  useEffect(() => {
+    window.addEventListener('focus', loadPerms);
+    return () => window.removeEventListener('focus', loadPerms);
+  }, []);
+
   async function loadPerms() {
     setLoadingPerms(true);
     try {
@@ -203,7 +210,14 @@ export default function SettingsPanel({ onClose }) {
                     }`}
                   >
                     <span className="text-sm flex-shrink-0 w-5 text-center leading-none">{perm.icon}</span>
-                    <span className="flex-1 text-sm text-slate-200 font-medium min-w-0">{perm.label}</span>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm text-slate-200 font-medium">{perm.label}</span>
+                      {perm.key === 'accessibility' && (
+                        <p className="text-[10px] text-slate-600 mt-0.5 leading-tight">
+                          If status is incorrect, click Refresh after changing permissions
+                        </p>
+                      )}
+                    </div>
                     <StatusBadge status={status} />
                     <div className="w-32 flex justify-end flex-shrink-0">
                       {showRequest && (
