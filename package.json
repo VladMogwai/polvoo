@@ -2,6 +2,7 @@
   "name": "polvoo",
   "version": "1.0.5",
   "description": "Developer Project Dashboard — like Docker Desktop for local dev projects",
+  "license": "MIT WITH Commons-Clause",
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -k -n VITE,ELECTRON -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
