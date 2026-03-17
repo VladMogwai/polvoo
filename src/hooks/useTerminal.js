@@ -193,10 +193,20 @@ export function useTerminal(containerRef, projectId, type, active, options = {})
 
     sessionIdRef.current = result.sessionId;
 
+    // Track whether the user has manually scrolled up so we don't
+    // yank them back to the bottom while they're reading history.
+    let userScrolledUp = false;
+    term.onScroll(() => {
+      const buf = term.buffer.active;
+      userScrolledUp = buf.viewportY < buf.length - term.rows;
+    });
+
     // Listen for PTY output
     unsubRef.current = onPtyOutput(({ sessionId, data }) => {
       if (sessionId === result.sessionId) {
-        term.write(data);
+        term.write(data, () => {
+          if (!userScrolledUp) term.scrollToBottom();
+        });
       }
     });
 

@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useProjectPorts } from '../hooks/useProjectPorts';
 import LogOutput from './LogOutput';
 import Terminal from './Terminal';
 import BranchSwitcher from './BranchSwitcher';
 import TerminalMenu from './TerminalMenu';
 import GitHistoryTab from './git/GitHistoryTab';
-import PortBadge from './PortBadge';
 import DockerPanel from './DockerPanel';
 import EnvViewer from './terminal/EnvViewer';
 import { useProcess } from '../hooks/useProcess';
@@ -63,7 +63,7 @@ const STATUS_TEXT = {
 };
 const STATUS_LABELS = { running: 'Running', stopped: 'Stopped', error: 'Error' };
 
-export default function DetailPanel({ project, gitInfo, onClose, onRemove, errorCount = 0, onLogsViewed, onLogsHidden, isActive = true }) {
+export default function DetailPanel({ project, gitInfo, onClose, onRemove, onUpdateProject, errorCount = 0, onLogsViewed, onLogsHidden, isActive = true }) {
   const [activeTab, setActiveTab] = useState('Logs');
   const [installedEditors, setInstalledEditors] = useState([]);
   const [runningEditors, setRunningEditors] = useState([]);
@@ -71,6 +71,7 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove, error
 
   const { logs, clearLogs, run, killCmd, runningCmd } = useProcess(project.id);
   const status = project.status || 'stopped';
+  const detectedPorts = useProjectPorts(project.id, status === 'running');
 
   // Keep local git info in sync with prop updates
   useEffect(() => {
@@ -174,10 +175,7 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove, error
             <span className="truncate">{git.lastCommit.message}</span>
           </div>
         )}
-        <PortBadge
-          project={project}
-          isRunning={status === 'running'}
-        />
+
       </div>
 
       {/* ── Controls ─────────────────────────────────────────── */}
@@ -208,6 +206,21 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove, error
 
         {/* External terminal launcher */}
         <TerminalMenu projectPath={project.path} />
+
+        {/* Auto-detected localhost URLs */}
+        {detectedPorts.map((port) => (
+          <button
+            key={port}
+            onClick={() => window.electronAPI?.shell?.openExternal(`http://localhost:${port}`)}
+            title={`Open http://localhost:${port}`}
+            className="flex items-center gap-1.5 px-3 py-1 text-xs rounded-lg transition-colors border bg-sky-900/20 hover:bg-sky-900/40 text-sky-300 border-sky-700/30 hover:border-sky-500/50"
+          >
+            <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20" />
+            </svg>
+            :{port}
+          </button>
+        ))}
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────── */}
@@ -259,6 +272,7 @@ export default function DetailPanel({ project, gitInfo, onClose, onRemove, error
         <div className={`h-full ${activeTab === 'Logs' ? 'flex flex-col' : 'hidden'}`}>
           <LogOutput
             logs={logs}
+            projectStatus={status}
             onCommand={(cmd) => run(cmd)}
             runningCmd={runningCmd}
             onKill={killCmd}

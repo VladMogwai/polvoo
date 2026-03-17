@@ -1,10 +1,11 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, systemPreferences, shell } = require('electron');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 
 const execAsync = promisify(exec);
 
@@ -20,6 +21,23 @@ const historyManager = require('./history');
 const envLoader = require('./envLoader');
 
 const isDev = !app.isPackaged;
+
+// ─── Single instance lock ─────────────────────────────────────────────────────
+
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  // Another instance is already running — quit immediately.
+  app.quit();
+} else {
+  // Focus the existing window if the user tries to open a second instance.
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
 
 let mainWindow = null;
 let projectsFilePath = null;
@@ -135,6 +153,14 @@ app.whenReady().then(() => {
   loadProjects();
   settings.load();
   createWindow();
+
+  // Forward port-detection events from process stdout to the renderer
+  processManager.portEvents.on('ports-updated', ({ projectId, ports }) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('ports:updated', { projectId, ports });
+    }
+  });
+
   startGitPolling();
 
   // Initialize auto-updater (after window is ready)
@@ -217,6 +243,14 @@ app.on('before-quit', async (event) => {
     await processManager.stopAll().catch(() => {});
   }
   app.exit(0);
+});
+
+// ─── IPC: Log buffer ──────────────────────────────────────────────────────────
+
+// Returns buffered log chunks for a project so panels that mounted after the
+// process started (or crashed) can replay what happened.
+ipcMain.handle('logs:get-buffer', (_, projectId) => {
+  return processManager.getLogBuffer(projectId);
 });
 
 // ─── IPC: Projects ────────────────────────────────────────────────────────────
@@ -403,12 +437,267 @@ ipcMain.handle('ports:update', (_, projectId, newPort) => {
   return { success: true, startCommand: newCmd };
 });
 
-ipcMain.handle('ports:running', async (_, projectId) => {
+// Returns ports detected from the project's own stdout/stderr — no lsof.
+// Accurate because only text the project actually printed is matched.
+ipcMain.handle('ports:running', (_, projectId) => {
+  const ports = processManager.getProjectDetectedPorts(projectId);
+  return { success: true, ports: ports.sort((a, b) => a - b) };
+});
+
+// Shared env with extended PATH for child_process calls
+const CHILD_ENV = {
+  ...process.env,
+  PATH: ['/usr/local/bin', '/opt/homebrew/bin', '/opt/homebrew/sbin',
+         '/usr/bin', '/bin', '/usr/sbin', '/sbin', process.env.PATH || ''].join(':'),
+};
+
+function parseLsofOutput(stdout) {
+  const lines = (stdout || '').trim().split('\n').slice(1);
+  const seen = new Set();
+  const result = [];
+  for (const line of lines) {
+    const cols = line.trim().split(/\s+/);
+    if (cols.length < 9) continue;
+    const cmd = cols[0];
+    const pid = parseInt(cols[1], 10);
+    if (!pid) continue;
+    // The address:port column looks like "*:3001" or "127.0.0.1:3001".
+    // lsof appends "(LISTEN)" or "(ESTABLISHED)" as a separate token, so
+    // we cannot rely on the last column — scan right-to-left for the first
+    // column that ends with :<digits>.
+    let name = '';
+    for (let i = cols.length - 1; i >= 8; i--) {
+      if (/:(\d+)$/.test(cols[i])) { name = cols[i]; break; }
+    }
+    if (!name) continue;
+    const portMatch = name.match(/:(\d+)$/);
+    if (!portMatch) continue;
+    const port = parseInt(portMatch[1], 10);
+    const key = `${pid}:${port}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ port, pid, cmd });
+  }
+  return result.sort((a, b) => a.port - b.port);
+}
+
+function parseNetstatOutput(stdout) {
+  const lines = (stdout || '').trim().split('\n');
+  const seen = new Set();
+  const result = [];
+  for (const line of lines) {
+    if (!line.includes('LISTEN')) continue;
+    const portMatch = line.match(/[.*\d]+\.(\d+)\s+[.*\d]+\.\*\s+LISTEN/);
+    if (!portMatch) continue;
+    const port = parseInt(portMatch[1], 10);
+    const pidMatch = line.match(/LISTEN\s+(\d+)/);
+    const pid = pidMatch ? parseInt(pidMatch[1], 10) : 0;
+    const key = `${pid}:${port}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({ port, pid: pid || null, cmd: '' });
+  }
+  return result.sort((a, b) => a.port - b.port);
+}
+
+// Enrich a parsed port list with project metadata.
+// Priority: (1) mainPort match, (2) port detected from process stdout.
+function enrichWithProjects(portList) {
+  const detected = processManager.getDetectedPorts(); // [{projectId, port}]
+  return portList.map((entry) => {
+    const mainMatch = projects.find((p) => p.mainPort && Number(p.mainPort) === entry.port);
+    if (mainMatch) return { ...entry, projectId: mainMatch.id, projectName: mainMatch.name };
+    const det = detected.find((d) => d.port === entry.port);
+    if (det) {
+      const proj = projects.find((p) => p.id === det.projectId);
+      if (proj) return { ...entry, projectId: proj.id, projectName: proj.name };
+    }
+    return entry;
+  });
+}
+
+// For ports that are still unmatched after enrichWithProjects, walk each port's
+// PID up the OS process tree to see if any ancestor is a tracked project PID.
+// Uses a single `ps` call to build the full pid→ppid map — no per-port syscalls.
+async function matchByPidTree(portList) {
+  const unmatched = portList.filter((e) => !e.projectName && e.pid);
+  if (unmatched.length === 0) return portList;
+
+  const allRunning = processManager.getAllRunning(); // [{projectId, pid, ...}]
+  if (allRunning.length === 0) return portList;
+
+  // Build pid→ppid map for the whole system in one shot
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+  let pidTree = new Map(); // pid -> ppid
   try {
-    const ports = await processManager.getRunningPorts(projectId);
-    return { success: true, ports };
+    const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid='], { env: CHILD_ENV });
+    for (const line of stdout.trim().split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        const pid = parseInt(parts[0], 10);
+        const ppid = parseInt(parts[1], 10);
+        if (pid) pidTree.set(pid, ppid);
+      }
+    }
   } catch {
-    return { success: true, ports: [] };
+    return portList;
+  }
+
+  // Map of tracked PIDs → project info (covers both main processes and commands)
+  const trackedPids = new Map(); // pid -> { projectId, projectName }
+  for (const proc of allRunning) {
+    if (!proc.pid) continue;
+    const proj = projects.find((p) => p.id === proc.projectId);
+    if (proj) trackedPids.set(proc.pid, { projectId: proj.id, projectName: proj.name });
+  }
+
+  // Walk ancestry: returns project info if any ancestor is a tracked PID
+  function findAncestorProject(pid) {
+    let cur = pid;
+    const visited = new Set();
+    while (cur > 1 && !visited.has(cur)) {
+      visited.add(cur);
+      if (trackedPids.has(cur)) return trackedPids.get(cur);
+      cur = pidTree.get(cur);
+      if (!cur) break;
+    }
+    return null;
+  }
+
+  return portList.map((entry) => {
+    if (entry.projectName || !entry.pid) return entry;
+    const match = findAncestorProject(entry.pid);
+    if (match) return { ...entry, projectId: match.projectId, projectName: match.projectName };
+    return entry;
+  });
+}
+
+// List all TCP ports currently in LISTEN state with their PID + command
+ipcMain.handle('ports:list', async () => {
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+  const opts = { maxBuffer: 1024 * 1024 * 5, env: CHILD_ENV };
+
+  // Try lsof — primary method on macOS
+  // lsof exits 1 on partial permission errors but still writes valid stdout
+  let lsofOut = '';
+  try {
+    ({ stdout: lsofOut } = await execFileAsync('/usr/sbin/lsof', ['-i', '-P', '-n', '-sTCP:LISTEN'], opts));
+  } catch (err) {
+    lsofOut = err.stdout || '';
+  }
+  let portList = parseLsofOutput(lsofOut);
+
+  if (portList.length === 0) {
+    // Fallback: lsof without -sTCP:LISTEN (older macOS compat)
+    let lsofOut2 = '';
+    try {
+      ({ stdout: lsofOut2 } = await execFileAsync('/usr/sbin/lsof', ['-i', '-P', '-n'], opts));
+    } catch (err2) {
+      lsofOut2 = err2.stdout || '';
+    }
+    portList = parseLsofOutput(lsofOut2);
+  }
+
+  if (portList.length === 0) {
+    // Final fallback: netstat
+    let nsOut = '';
+    try {
+      ({ stdout: nsOut } = await execFileAsync('/usr/sbin/netstat', ['-anv', '-p', 'tcp'], opts));
+    } catch (err3) {
+      nsOut = err3.stdout || '';
+    }
+    portList = parseNetstatOutput(nsOut);
+  }
+
+  // Merge ports detected from process stdout that lsof/netstat may have missed.
+  // This catches child processes (e.g. Vite spawned by the app) reliably.
+  const knownPorts = new Set(portList.map((p) => p.port));
+  for (const { projectId, port } of processManager.getDetectedPorts()) {
+    if (knownPorts.has(port)) continue;
+    const proj = projects.find((p) => p.id === projectId);
+    if (!proj) continue;
+    portList.push({ port, pid: null, cmd: '', projectId: proj.id, projectName: proj.name });
+    knownPorts.add(port);
+  }
+
+  const enriched = enrichWithProjects(portList);
+  const resolved = await matchByPidTree(enriched);
+  return resolved.sort((a, b) => a.port - b.port);
+});
+
+// Kill process on a specific port (no PID needed)
+ipcMain.handle('ports:kill-port', async (_, port) => {
+  const { execFile } = require('child_process');
+  const { promisify } = require('util');
+  const execFileAsync = promisify(execFile);
+  const opts = { env: CHILD_ENV };
+  try {
+    // If this port belongs to a managed project, stop it via processManager
+    // so that manualStop is set BEFORE the kill signal — prevents "Error" status.
+    const affectedProject =
+      projects.find((p) => p.mainPort && Number(p.mainPort) === port) ||
+      (() => {
+        const det = processManager.getDetectedPorts().find((d) => d.port === port);
+        return det ? projects.find((p) => p.id === det.projectId) : null;
+      })();
+    if (affectedProject && processManager.isRunning(affectedProject.id)) {
+      processManager.stop(affectedProject.id);
+      return { success: true };
+    }
+
+    // Unmanaged process — use lsof + raw treeKill
+    let pidOut = '';
+    try {
+      ({ stdout: pidOut } = await execFileAsync('/usr/sbin/lsof', ['-ti', `:${port}`], opts));
+    } catch (err) {
+      pidOut = err.stdout || '';
+    }
+    const pids = pidOut.trim().split('\n').map((s) => parseInt(s.trim(), 10)).filter(Boolean);
+    if (pids.length === 0) return { success: false, error: 'No process found on port ' + port };
+
+    const treeKill = require('tree-kill');
+    await Promise.all(pids.map((pid) => new Promise((resolve) => {
+      treeKill(pid, 'SIGKILL', () => resolve());
+    })));
+
+    return { success: true, killedPids: pids };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+// Kill a process by PID (SIGTERM, then SIGKILL if needed)
+ipcMain.handle('ports:kill-pid', async (_, pid) => {
+  try {
+    // If this PID belongs to a managed project, stop via processManager
+    // so manualStop is set before the kill signal.
+    const allRunning = processManager.getAllRunning();
+    const managed = allRunning.find((e) => e.pid === pid);
+    if (managed && managed.projectId) {
+      const proj = projects.find((p) => p.id === managed.projectId);
+      if (proj && processManager.isRunning(managed.projectId)) {
+        processManager.stop(managed.projectId);
+        return { success: true };
+      }
+    }
+
+    // Unmanaged PID — raw kill
+    const treeKill = require('tree-kill');
+    await new Promise((resolve) => {
+      treeKill(pid, 'SIGTERM', (err) => {
+        if (err) {
+          try { treeKill(pid, 'SIGKILL'); } catch (_) {}
+        }
+        resolve();
+      });
+    });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 });
 
@@ -767,6 +1056,112 @@ ipcMain.handle('settings:get', () => {
 
 ipcMain.handle('settings:set', (_, updates) => {
   return settings.set(updates);
+});
+
+// ─── IPC: Settings panel ──────────────────────────────────────────────────────
+
+function normalizePermStatus(s) {
+  if (s === 'granted' || s === 'authorized') return 'granted';
+  if (s === 'denied' || s === 'restricted') return 'denied';
+  return 'not-determined';
+}
+
+ipcMain.handle('settings:get-permissions', async () => {
+  const perms = {};
+
+  // Notifications
+  try {
+    const s = systemPreferences.getAuthorizationStatus('notifications');
+    perms.notifications = normalizePermStatus(s);
+  } catch { perms.notifications = 'not-determined'; }
+
+  // Accessibility
+  try {
+    perms.accessibility = systemPreferences.isTrustedAccessibilityClient(false) ? 'granted' : 'denied';
+  } catch { perms.accessibility = 'not-determined'; }
+
+  // Full Disk Access
+  try {
+    const s = systemPreferences.getAuthorizationStatus('fullDiskAccess');
+    perms.fullDiskAccess = normalizePermStatus(s);
+  } catch {
+    // Fallback: probe the TCC database — readable only with FDA
+    try {
+      const tcc = path.join(os.homedir(), 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
+      fs.accessSync(tcc, fs.constants.R_OK);
+      perms.fullDiskAccess = 'granted';
+    } catch (err) {
+      perms.fullDiskAccess = (err.code === 'EACCES' || err.code === 'EPERM') ? 'denied' : 'not-determined';
+    }
+  }
+
+  // Camera
+  try {
+    perms.camera = systemPreferences.getMediaAccessStatus('camera');
+  } catch { perms.camera = 'not-determined'; }
+
+  // Microphone
+  try {
+    perms.microphone = systemPreferences.getMediaAccessStatus('microphone');
+  } catch { perms.microphone = 'not-determined'; }
+
+  // Screen Recording
+  try {
+    perms.screen = systemPreferences.getMediaAccessStatus('screen');
+  } catch { perms.screen = 'not-determined'; }
+
+  return perms;
+});
+
+ipcMain.handle('settings:request-permission', async (_, name) => {
+  try {
+    if (name === 'camera' || name === 'microphone') {
+      const granted = await systemPreferences.askForMediaAccess(name);
+      return { success: true, granted };
+    }
+    return { success: false, error: 'Cannot request this permission programmatically' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('settings:open-system-prefs', async (_, url) => {
+  try {
+    await shell.openExternal(url || 'x-apple.systempreferences:');
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('settings:get-general', () => {
+  try {
+    const version = app.getVersion();
+    const { openAtLogin } = app.getLoginItemSettings();
+    return { version, launchAtLogin: openAtLogin };
+  } catch {
+    return { version: '', launchAtLogin: false };
+  }
+});
+
+ipcMain.handle('settings:set-launch-at-login', (_, value) => {
+  try {
+    app.setLoginItemSettings({ openAtLogin: Boolean(value) });
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('settings:clear-data', async () => {
+  try {
+    await processManager.stopAll().catch(() => {});
+    projects = [];
+    saveProjects();
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
 });
 
 ipcMain.handle('terminals:add-custom', (_, terminal) => {

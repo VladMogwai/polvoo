@@ -1,6 +1,6 @@
 'use strict';
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, shell, webUtils } = require('electron');
 const pkg = require('../package.json');
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProcessStats: (pids) => ipcRenderer.invoke('process:get-stats', pids),
   updatePort: (projectId, port) => ipcRenderer.invoke('ports:update', projectId, port),
   getRunningPorts: (projectId) => ipcRenderer.invoke('ports:running', projectId),
+  getLogBuffer: (projectId) => ipcRenderer.invoke('logs:get-buffer', projectId),
+  listPorts: () => ipcRenderer.invoke('ports:list'),
+  killPid: (pid) => ipcRenderer.invoke('ports:kill-pid', pid),
+  killPort: (port) => ipcRenderer.invoke('ports:kill-port', port),
 
   // Git
   getGitInfo: (projectPath) => ipcRenderer.invoke('git:get-info', projectPath),
@@ -53,6 +57,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (updates) => ipcRenderer.invoke('settings:set', updates),
+
+  // Settings panel
+  getPermissions: () => ipcRenderer.invoke('settings:get-permissions'),
+  requestPermission: (name) => ipcRenderer.invoke('settings:request-permission', name),
+  openSystemPrefs: (url) => ipcRenderer.invoke('settings:open-system-prefs', url),
+  getGeneralSettings: () => ipcRenderer.invoke('settings:get-general'),
+  setLaunchAtLogin: (val) => ipcRenderer.invoke('settings:set-launch-at-login', val),
+  clearAllData: () => ipcRenderer.invoke('settings:clear-data'),
 
   // Dev rebuild
   rebuildInstall: () => ipcRenderer.invoke('dev:rebuild-install'),
@@ -89,6 +101,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_, payload) => callback(payload);
     ipcRenderer.on('git:update', handler);
     return () => ipcRenderer.removeListener('git:update', handler);
+  },
+  onPortsUpdated: (callback) => {
+    const handler = (_, payload) => callback(payload);
+    ipcRenderer.on('ports:updated', handler);
+    return () => ipcRenderer.removeListener('ports:updated', handler);
   },
   onXcodeCltMissing: (callback) => {
     const handler = () => callback();
@@ -164,4 +181,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pinsAdd: (projectId, command) => ipcRenderer.invoke('pins:add', projectId, command),
   pinsRemove: (projectId, command) => ipcRenderer.invoke('pins:remove', projectId, command),
   pinsReorder: (projectId, commands) => ipcRenderer.invoke('pins:reorder', projectId, commands),
+
+  // Shell utilities
+  shell: {
+    openExternal: (url) => shell.openExternal(url),
+  },
+
+  // File path resolution (Electron 32+ replacement for File.path)
+  getPathForFile: (file) => webUtils.getPathForFile(file),
 });

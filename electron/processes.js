@@ -4,8 +4,12 @@ const { spawn } = require('child_process');
 const { Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const EventEmitter = require('events');
 
 const ptyManager = require('./pty');
+
+// Emits 'ports-updated' when a project's detected port set changes
+const portEvents = new EventEmitter();
 
 // Fallback PATH for when the shell env hasn't been captured yet
 const FULL_PATH = [
@@ -26,6 +30,90 @@ const running = new Map();
 
 // Map of `${projectId}:${command}` -> childProcess
 const runningCommands = new Map();
+
+// Ports detected from process stdout/stderr, keyed by projectId
+// Map<projectId, Set<port>>
+const detectedPorts = new Map();
+
+// Per-project log buffer — survives process exit so late-mounting panels can
+// replay what happened. Cleared at the start of each new run.
+// Map<projectId, Array<{type:'stdout'|'stderr', data:string}>>
+const logBuffers = new Map();
+const LOG_BUFFER_MAX_CHUNKS = 500;
+
+function bufferLog(projectId, type, data) {
+  let buf = logBuffers.get(projectId);
+  if (!buf) { buf = []; logBuffers.set(projectId, buf); }
+  buf.push({ type, data });
+  if (buf.length > LOG_BUFFER_MAX_CHUNKS) buf.shift();
+}
+
+function getLogBuffer(projectId) {
+  return logBuffers.get(projectId) || [];
+}
+
+// Strict per-line port detection — only patterns that unambiguously reference
+// a localhost/listening port (not counters, file sizes, timing values, etc.)
+const PORT_PATTERNS = [
+  // host:port patterns — unambiguous
+  /localhost:(\d{4,5})/,
+  /127\.0\.0\.1:(\d{4,5})/,
+  /0\.0\.0\.0:(\d{4,5})/,
+  /\[::\]:(\d{4,5})/,
+  // URL-based patterns from dev servers (Vite "Local:", webpack "running at")
+  /Local:\s+https?:\/\/[^:]+:(\d{4,5})/i,
+  /running at\s+https?:\/\/[^:]+:(\d{4,5})/i,
+  // "listening on 3000" / "listening on :3000"
+  /\blistening\s+on[:\s]+(\d{4,5})\b/i,
+  // "on port 3000" / "at port 3000" — requires explicit on/at preposition
+  /\b(?:on|at)\s+port[:\s]+(\d{4,5})\b/i,
+  // "port 3000" or "port: 3000" only when it ends the line (no trailing words)
+  /\bport[:\s]+(\d{4,5})\s*$/i,
+  // "started on 3000" / "started on :3000"
+  /\bstarted\s+on[:\s]+(\d{4,5})\b/i,
+];
+
+function detectPortFromLine(line) {
+  for (const pattern of PORT_PATTERNS) {
+    const m = line.match(pattern);
+    if (m) {
+      const port = parseInt(m[1], 10);
+      if (port > 1024 && port < 65535) return port;
+    }
+  }
+  return null;
+}
+
+function trackPorts(projectId, text) {
+  const lines = text.split('\n');
+  let changed = false;
+  if (!detectedPorts.has(projectId)) detectedPorts.set(projectId, new Set());
+  const set = detectedPorts.get(projectId);
+  for (const line of lines) {
+    const port = detectPortFromLine(line.trim());
+    if (port && !set.has(port)) {
+      set.add(port);
+      changed = true;
+    }
+  }
+  if (changed) {
+    portEvents.emit('ports-updated', { projectId, ports: [...set] });
+  }
+}
+
+// Returns flat array of { projectId, port } for ProcessMonitor / ports:list
+function getDetectedPorts() {
+  const result = [];
+  for (const [projectId, ports] of detectedPorts) {
+    for (const port of ports) result.push({ projectId, port });
+  }
+  return result;
+}
+
+// Returns port array for a single project
+function getProjectDetectedPorts(projectId) {
+  return [...(detectedPorts.get(projectId) || [])];
+}
 
 function parseCommand(cmd) {
   const parts = [];
@@ -79,6 +167,9 @@ function start(project, onData, onStatusChange) {
     stop(project.id);
   }
 
+  // Fresh run — clear the log buffer so this session starts clean
+  logBuffers.set(project.id, []);
+
   const cmd = (project.startCommand || '').trim();
   if (!cmd) throw new Error('Empty start command');
 
@@ -106,11 +197,17 @@ function start(project, onData, onStatusChange) {
   onStatusChange('running');
 
   child.stdout.on('data', (data) => {
-    onData('stdout', data.toString());
+    const text = data.toString();
+    trackPorts(project.id, text);
+    bufferLog(project.id, 'stdout', text);
+    onData('stdout', text);
   });
 
   child.stderr.on('data', (data) => {
-    onData('stderr', data.toString());
+    const text = data.toString();
+    trackPorts(project.id, text);
+    bufferLog(project.id, 'stderr', text);
+    onData('stderr', text);
   });
 
   child.on('error', (err) => {
@@ -121,11 +218,19 @@ function start(project, onData, onStatusChange) {
 
   child.on('close', (code, signal) => {
     const wasRunning = running.get(project.id);
-    if (wasRunning) {
-      const isCrash = code !== 0 && code !== null && signal !== 'SIGTERM' && signal !== 'SIGKILL';
-      const status = code === 0 ? 'stopped' : (signal === 'SIGTERM' || signal === 'SIGKILL') ? 'stopped' : 'error';
-      onData('stdout', `\n[Process exited with code ${code}${signal ? ` (${signal})` : ''}]\n`);
-      running.set(project.id, { ...wasRunning, status, process: null });
+    // Guard: ignore stale close events from a previous run (e.g. after restart).
+    // If the current entry belongs to a different child (different PID), skip.
+    if (wasRunning && wasRunning.pid === child.pid) {
+      const wasManuallyStopped = Boolean(wasRunning.manualStop);
+      // SIGTERM/SIGKILL = manual stop; code 0 = clean exit; code 1 = concurrently
+      // normal exit (one child stopped); only code > 1 is a real crash.
+      const isSignalStop = signal === 'SIGTERM' || signal === 'SIGKILL';
+      const isCrash = !wasManuallyStopped && !isSignalStop && code !== null && code > 1;
+      const status = (wasManuallyStopped || isSignalStop || code === 0 || code === 1) ? 'stopped' : 'error';
+      const exitMsg = `\n[Process exited with code ${code}${signal ? ` (${signal})` : ''}]\n`;
+      bufferLog(project.id, 'stdout', exitMsg);
+      onData('stdout', exitMsg);
+      running.set(project.id, { ...wasRunning, manualStop: false, status, process: null });
       onStatusChange(status);
       if (isCrash) {
         try {
@@ -141,14 +246,19 @@ function start(project, onData, onStatusChange) {
 
 function stop(projectId) {
   const entry = running.get(projectId);
+  detectedPorts.delete(projectId);
+  portEvents.emit('ports-updated', { projectId, ports: [] });
   if (!entry || !entry.process) return;
+
+  // Mark as intentionally stopped so the 'close' handler doesn't mis-classify
+  // a non-zero exit code (common when killing a shell process) as a crash.
+  running.set(projectId, { ...entry, manualStop: true, status: 'stopped', process: null });
 
   treeKill(entry.process.pid, 'SIGTERM', (err) => {
     if (err) {
       try { treeKill(entry.process.pid, 'SIGKILL'); } catch (_) {}
     }
   });
-  running.set(projectId, { ...entry, status: 'stopped', process: null });
 }
 
 // Kill every running process and every running command, wait for all to die.
@@ -212,8 +322,16 @@ function runCommand(project, command, onData, onCommandStatus) {
 
   onData('stdout', `$ ${command}\n`);
 
-  child.stdout.on('data', (data) => onData('stdout', data.toString()));
-  child.stderr.on('data', (data) => onData('stderr', data.toString()));
+  child.stdout.on('data', (data) => {
+    const text = data.toString();
+    trackPorts(project.id, text);
+    onData('stdout', text);
+  });
+  child.stderr.on('data', (data) => {
+    const text = data.toString();
+    trackPorts(project.id, text);
+    onData('stderr', text);
+  });
   child.on('close', (code) => {
     runningCommands.delete(key);
     onCommandStatus?.('stopped', command);
@@ -319,6 +437,17 @@ async function getProcessStats(pids) {
   }
 }
 
+// Returns all PIDs tracked for a project (main process + any running commands)
+function getProjectPids(projectId) {
+  const pids = [];
+  const entry = running.get(projectId);
+  if (entry && entry.pid) pids.push(entry.pid);
+  for (const [, child] of runningCommands) {
+    if (child && child.pid && child._projectId === projectId) pids.push(child.pid);
+  }
+  return pids;
+}
+
 // Returns the number of currently running main processes (not commands)
 function getRunningCount() {
   let count = 0;
@@ -328,4 +457,4 @@ function getRunningCount() {
   return count;
 }
 
-module.exports = { start, stop, stopAll, runCommand, killCommand, getStatus, isRunning, getRunningPorts, getRunningCount, getAllRunning, getProcessStats };
+module.exports = { start, stop, stopAll, runCommand, killCommand, getStatus, isRunning, getRunningPorts, getRunningCount, getAllRunning, getProcessStats, getDetectedPorts, getProjectDetectedPorts, getProjectPids, portEvents, getLogBuffer };

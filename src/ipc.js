@@ -17,6 +17,10 @@ export const getProcessStats = (pids) => api.getProcessStats(pids);
 export const killCommand = (id, cmd) => api.killCommand(id, cmd);
 export const updatePort = (id, port) => api.updatePort(id, port);
 export const getRunningPorts = (id) => api.getRunningPorts(id);
+export const getLogBuffer = (id) => api.getLogBuffer(id);
+export const listPorts = () => api.listPorts();
+export const killPid = (pid) => api.killPid(pid);
+export const killPort = (port) => api.killPort(port);
 
 export const getGitInfo = (path) => api.getGitInfo(path);
 export const getBranches = (path) => api.getBranches(path);
@@ -44,6 +48,14 @@ export const addCustomTerminal = (t) => api.addCustomTerminal(t);
 export const removeCustomTerminal = (id) => api.removeCustomTerminal(id);
 export const getSettings = () => api.getSettings();
 export const setSettings = (updates) => api.setSettings(updates);
+
+// Settings panel
+export const getPermissions = () => api.getPermissions();
+export const requestPermission = (name) => api.requestPermission(name);
+export const openSystemPrefs = (url) => api.openSystemPrefs(url);
+export const getGeneralSettings = () => api.getGeneralSettings();
+export const setLaunchAtLogin = (val) => api.setLaunchAtLogin(val);
+export const clearAllData = () => api.clearAllData();
 export const pickAppDialog = () => api.pickAppDialog();
 
 // Event listener helpers — each returns an unsubscribe function
@@ -52,6 +64,7 @@ export const onPtyOutput = (cb) => api.onPtyOutput(cb);
 export const onProcessStatusUpdate = (cb) => api.onProcessStatusUpdate(cb);
 export const onCommandStatus = (cb) => api.onCommandStatus(cb);
 export const onGitUpdate = (cb) => api.onGitUpdate(cb);
+export const onPortsUpdated = (cb) => api.onPortsUpdated(cb);
 
 export const getProjectScripts = (id) => api.getProjectScripts(id);
 

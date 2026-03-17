@@ -23,6 +23,9 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyAnchorRef, setHistoryAnchorRef] = useState(null);
 
+  // Drag and drop
+  const [isDragging, setIsDragging] = useState(false);
+
   // Context menu
   const [menu, setMenu] = useState({ visible: false, x: 0, y: 0 });
   const menuRef = useRef(null);
@@ -169,6 +172,38 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
     setMenu((m) => ({ ...m, visible: false }));
   }, [sendInput]);
 
+  // ── Drag and drop handlers ────────────────────────────────────────────────
+
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    const files = Array.from(e.dataTransfer.files);
+    console.log('DROP FILES:', files);
+    if (!files.length) return;
+    const paths = files.map((f) => {
+      // Electron 32+ requires webUtils.getPathForFile(); File.path is deprecated and returns ""
+      const p = window.electronAPI?.getPathForFile?.(f) || f.path || f.name;
+      console.log('FILE:', f.name, 'PATH:', p);
+      return p && p.includes(' ') ? `"${p}"` : p;
+    }).filter(Boolean).join(' ');
+    console.log('PATHS TO INSERT:', paths);
+    if (!paths) return;
+    sendInput(paths);
+  }, [sendInput]);
+
   const hasDomSelection = Boolean(window.getSelection()?.toString());
 
   return (
@@ -196,13 +231,31 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
         <div
           ref={containerRef}
           onContextMenu={handleContextMenu}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
           style={{
             flex: 1,
             minHeight: 0,
             background: '#0d1117',
             overflow: 'hidden',
+            position: 'relative',
           }}
-        />
+        >
+          {isDragging && (
+            <div style={{
+              position: 'absolute', inset: 0, zIndex: 10,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'rgba(139, 92, 246, 0.15)',
+              border: '2px dashed #8b5cf6', borderRadius: '8px',
+              pointerEvents: 'none',
+            }}>
+              <span style={{ color: '#8b5cf6', fontSize: '14px' }}>
+                Drop to insert path
+              </span>
+            </div>
+          )}
+        </div>
 
       </div>
 

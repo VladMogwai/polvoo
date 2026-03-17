@@ -4,6 +4,7 @@ import DetailPanel from './components/DetailPanel';
 import AddProjectModal from './components/AddProjectModal';
 import ProcessMonitor from './components/ProcessMonitor';
 import UpdateModal from './components/UpdateModal';
+import SettingsPanel from './components/SettingsPanel';
 import { useProjects } from './hooks/useProjects';
 import {
   onProcessStatusUpdate, rebuildInstall, onLogOutput, setBadgeCount,
@@ -20,6 +21,7 @@ export default function App() {
   const [initializedIds, setInitializedIds] = useState(() => new Set());
   const [showAddModal, setShowAddModal] = useState(false);
   const [showMonitor, setShowMonitor] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const [runningCount, setRunningCount] = useState(0);
   const [xcodeBannerVisible, setXcodeBannerVisible] = useState(false);
   const [panelWidth, setPanelWidth] = useState(DEFAULT_PANEL_WIDTH);
@@ -346,6 +348,7 @@ export default function App() {
             onRemove={handleRemoveProject}
             onReorder={reorderProjects}
             onOpenMonitor={() => setShowMonitor(true)}
+            onOpenSettings={() => setShowSettings(true)}
             onRebuildInstall={rebuildInstall}
             runningCount={runningCount}
             updateState={updateStatus?.state}
@@ -438,6 +441,7 @@ export default function App() {
                   gitInfo={gitInfo[p.id]}
                   onClose={() => setSelectedProject(null)}
                   onRemove={handleRemoveProject}
+                  onUpdateProject={updateProject}
                   errorCount={errorCounts[p.id] || 0}
                   onLogsViewed={handleLogsViewed}
                   onLogsHidden={handleLogsHidden}
@@ -466,6 +470,10 @@ export default function App() {
           onInstall={() => installUpdate()}
           onDismiss={handleSnoozeModal}
         />
+      )}
+
+      {showSettings && (
+        <SettingsPanel onClose={() => setShowSettings(false)} />
       )}
     </div>
   );

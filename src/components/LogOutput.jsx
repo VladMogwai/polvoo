@@ -5,7 +5,7 @@ function stripAnsi(str) {
   return str.replace(ANSI_RE, '');
 }
 
-export default function LogOutput({ logs, onCommand, runningCmd, onKill }) {
+export default function LogOutput({ logs, projectStatus, onCommand, runningCmd, onKill }) {
   const bottomRef = useRef(null);
   const containerRef = useRef(null);
   const inputRef = useRef(null);
@@ -53,7 +53,11 @@ export default function LogOutput({ logs, onCommand, runningCmd, onKill }) {
         className="flex-1 overflow-y-auto p-3 font-mono text-xs leading-relaxed bg-[#0b1120]"
       >
         {logs.length === 0 && (
-          <span className="text-slate-500">No output yet. Start the process to see logs.</span>
+          <span className={projectStatus === 'error' ? 'text-red-500/70' : 'text-slate-500'}>
+            {projectStatus === 'error'
+              ? 'Process exited with an error — no output was captured.'
+              : 'No output yet. Start the process to see logs.'}
+          </span>
         )}
         {logs.map((entry, i) => {
           const text = stripAnsi(entry.text);

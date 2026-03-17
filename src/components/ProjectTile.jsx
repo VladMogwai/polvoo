@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { startProcess, stopProcess, runCommand, killCommand, onCommandStatus, getProjectScripts } from '../ipc';
-import PortBadge from './PortBadge';
+import { useProjectPorts } from '../hooks/useProjectPorts';
 
 const STATUS_RING = {
   running: 'border-emerald-500/40',
@@ -36,6 +36,7 @@ function sortScripts(names) {
 
 export default function ProjectTile({ project, gitInfo, isSelected, onSelect, onStatusChange, onUpdateProject, onRemove }) {
   const status = project.status || 'stopped';
+  const detectedPorts = useProjectPorts(project.id, status === 'running');
   const [scripts, setScripts] = useState(null);
   const [hidden, setHidden] = useState(() => new Set(project.hiddenScripts || []));
   const [runningScripts, setRunningScripts] = useState(new Set());
@@ -198,8 +199,8 @@ export default function ProjectTile({ project, gitInfo, isSelected, onSelect, on
       {/* Path */}
       <p className="text-xs text-slate-600 font-mono truncate -mt-0.5">{project.path}</p>
 
-      {/* Git branch + port badge */}
-      <div className="flex items-center justify-between gap-2">
+      {/* Git branch */}
+      <div className="flex items-center gap-2">
         {gitInfo?.branch ? (
           <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0 overflow-hidden">
             <svg className="w-3 h-3 text-slate-500 flex-shrink-0" viewBox="0 0 16 16" fill="currentColor">
@@ -210,11 +211,6 @@ export default function ProjectTile({ project, gitInfo, isSelected, onSelect, on
         ) : (
           <div className="text-xs text-slate-700">no git</div>
         )}
-        <PortBadge
-          project={project}
-          isRunning={status === 'running'}
-          onPortChanged={() => {}}
-        />
       </div>
 
       {/* Separator */}
@@ -347,6 +343,32 @@ export default function ProjectTile({ project, gitInfo, isSelected, onSelect, on
                 </div>
               )}
             </>
+          )}
+        </div>
+      )}
+
+      {/* Ports row — shown only when running and ports are detected */}
+      {status === 'running' && detectedPorts.length > 0 && (
+        <div className="flex items-center gap-1.5 flex-wrap" onClick={(e) => e.stopPropagation()}>
+          <span className="text-[11px] text-slate-600 flex-shrink-0">Ports:</span>
+          {detectedPorts.slice(0, 3).map((port) => (
+            <button
+              key={port}
+              onClick={(e) => {
+                e.stopPropagation();
+                window.electronAPI?.shell?.openExternal(`http://localhost:${port}`);
+              }}
+              title={`Open http://localhost:${port}`}
+              className="flex items-center gap-1 px-1.5 py-0.5 bg-slate-700/50 hover:bg-sky-900/40 border border-slate-600/40 hover:border-sky-500/50 rounded text-[11px] font-mono text-slate-400 hover:text-sky-300 transition-colors"
+            >
+              <svg className="w-2.5 h-2.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <circle cx="12" cy="12" r="10" /><path strokeLinecap="round" d="M2 12h20M12 2a15.3 15.3 0 010 20M12 2a15.3 15.3 0 000 20" />
+              </svg>
+              :{port}
+            </button>
+          ))}
+          {detectedPorts.length > 3 && (
+            <span className="text-[10px] text-slate-600">+{detectedPorts.length - 3} more</span>
           )}
         </div>
       )}
