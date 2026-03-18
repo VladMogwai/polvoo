@@ -5,7 +5,7 @@ import { gitGetLog } from '../../ipc';
 const ROW_HEIGHT = 52;
 const OVERSCAN = 5;
 
-export default function CommitList({ projectId, selectedHash, onSelect }) {
+export default function CommitList({ projectId, selectedHash, onSelect, active }) {
   const [commits, setCommits] = useState([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -34,6 +34,33 @@ export default function CommitList({ projectId, selectedHash, onSelect }) {
     setIsRepo(true);
     load(0);
   }, [projectId, load]);
+
+  // Refresh when tab becomes active (e.g. after a new commit)
+  const prevActive = useRef(false);
+  useEffect(() => {
+    if (active && !prevActive.current) {
+      load(0);
+    }
+    prevActive.current = active;
+  }, [active, load]);
+
+  // Poll for new commits every 10s while tab is active
+  const latestHashRef = useRef(null);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(async () => {
+      try {
+        const result = await gitGetLog(projectId, 1, 0);
+        if (!result.isRepo || !result.commits?.length) return;
+        const latest = result.commits[0].hash;
+        if (latestHashRef.current && latestHashRef.current !== latest) {
+          load(0);
+        }
+        latestHashRef.current = latest;
+      } catch {}
+    }, 10000);
+    return () => clearInterval(t);
+  }, [active, projectId, load]);
 
   useEffect(() => {
     const el = containerRef.current;

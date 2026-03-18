@@ -62,6 +62,9 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyAnchorRef, setHistoryAnchorRef] = useState(null);
 
+  // Scroll state
+  const [isAtBottom, setIsAtBottom] = useState(true);
+
   // Drag and drop
   const [isDragging, setIsDragging] = useState(false);
 
@@ -70,7 +73,8 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
   const menuRef = useRef(null);
 
   // Terminal hook — onCommand saves directly-typed commands to history
-  const { dispose, sendInput, fit } = useTerminal(containerRef, projectId, type, active, {
+  const { dispose, sendInput, fit, scrollToBottom } = useTerminal(containerRef, projectId, type, active, {
+    onScrollChange: (atBottom) => setIsAtBottom(atBottom),
     onCommand: async (cmd) => {
       try {
         if (!isShellCommand(cmd)) return;
@@ -297,6 +301,36 @@ export default function BlockTerminal({ projectId, project: projectProp, type, a
                 Drop to insert path
               </span>
             </div>
+          )}
+          {!isAtBottom && (
+            <button
+              onClick={scrollToBottom}
+              style={{
+                position: 'absolute',
+                bottom: 12,
+                right: 20,
+                zIndex: 20,
+                width: 28,
+                height: 28,
+                borderRadius: '50%',
+                background: '#21262d',
+                border: '1px solid #30363d',
+                color: '#8b949e',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+                transition: 'background 0.15s, color 0.15s',
+              }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#30363d'; e.currentTarget.style.color = '#e6edf3'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#21262d'; e.currentTarget.style.color = '#8b949e'; }}
+              title="Scroll to bottom"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            </button>
           )}
         </div>
 

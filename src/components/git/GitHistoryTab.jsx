@@ -160,6 +160,7 @@ export default function GitHistoryTab({ project, active }) {
             projectId={project.id}
             selectedHash={selectedCommit?.hash}
             onSelect={handleSelectCommit}
+            active={active && tab === 'History'}
           />
         ) : (
           <GitStagingPanel

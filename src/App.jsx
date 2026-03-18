@@ -236,7 +236,30 @@ export default function App() {
   };
 
   return (
-    <div className="w-full h-full flex flex-col overflow-hidden bg-slate-900">
+    <div className="w-full h-full flex flex-col overflow-hidden" style={{ background: '#07090f', position: 'relative' }}>
+      {/* Ambient background glows */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', overflow: 'hidden', zIndex: 0 }}>
+        <div style={{
+          position: 'absolute',
+          bottom: '-60px',
+          left: '-80px',
+          width: 400,
+          height: 400,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(37,99,235,0.28) 0%, transparent 70%)',
+          filter: 'blur(50px)',
+        }} />
+        <div style={{
+          position: 'absolute',
+          bottom: '-80px',
+          right: '-60px',
+          width: 480,
+          height: 480,
+          borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(139,28,180,0.32) 0%, rgba(190,50,100,0.18) 40%, transparent 70%)',
+          filter: 'blur(60px)',
+        }} />
+      </div>
       {/* Auto-update banner */}
       {showBanner && (
         <div style={BANNER_STYLE}>
@@ -337,7 +360,7 @@ export default function App() {
       )}
 
       {/* Main layout */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div className="flex flex-1 min-h-0 overflow-hidden" style={{ position: 'relative', zIndex: 1 }}>
         {/* Left pane */}
         <div
           className="flex flex-col overflow-hidden flex-shrink-0"
@@ -447,6 +470,8 @@ export default function App() {
                   flexDirection: 'column',
                   height: '100%',
                   overflow: 'hidden',
+                  position: 'relative',
+                  zIndex: 1,
                 }}
               >
                 <DetailPanel

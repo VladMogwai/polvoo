@@ -50,7 +50,7 @@ const STATUS_TEXT = {
 const STATUS_LABELS = { running: 'Running', stopped: 'Stopped', error: 'Error' };
 
 export default function DetailPanel({ project, gitInfo, onClose, onRemove, onUpdateProject, errorCount = 0, onLogsViewed, onLogsHidden, isActive = true }) {
-  const [activeTab, setActiveTab] = useState('Logs');
+  const [activeTab, setActiveTab] = useState('Terminal');
   const [installedEditors, setInstalledEditors] = useState([]);
   const [editorDropdownOpen, setEditorDropdownOpen] = useState(false);
   const [localGitInfo, setLocalGitInfo] = useState(gitInfo || {});

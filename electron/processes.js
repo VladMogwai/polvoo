@@ -26,8 +26,6 @@ const FULL_PATH = [
   process.env.PATH || '',
 ].join(':');
 
-const treeKill = require('tree-kill');
-
 // Map of projectId -> { process, status }
 const running = new Map();
 
@@ -192,12 +190,15 @@ async function start(project, onData, onStatusChange) {
     ...(_opAgentSock ? { SSH_AUTH_SOCK: _opAgentSock } : {}),
   };
 
-  // Use shell: true so inline env vars (PORT=3000 npm run dev), pipes, etc. work correctly
+  // Use shell: true so inline env vars (PORT=3000 npm run dev), pipes, etc. work correctly.
+  // detached: true puts the child in its own process group so process.kill(-pid) reliably
+  // kills the entire subtree (shell + all grandchildren) on stop.
   const child = spawn(cmd, [], {
     shell: true,
     cwd: project.path,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
   });
 
   running.set(project.id, { process: child, status: 'running', pid: child.pid, command: project.startCommand, startedAt: Date.now() });
@@ -261,11 +262,15 @@ function stop(projectId) {
   // a non-zero exit code (common when killing a shell process) as a crash.
   running.set(projectId, { ...entry, manualStop: true, status: 'stopped', process: null });
 
-  treeKill(entry.process.pid, 'SIGTERM', (err) => {
-    if (err) {
-      try { treeKill(entry.process.pid, 'SIGKILL'); } catch (_) {}
-    }
-  });
+  const pid = entry.process.pid;
+  // Kill the entire process group (negative PID). This covers the shell spawned by
+  // shell:true plus all its descendants, including processes that create their own
+  // sub-shells (concurrently, npm scripts, etc.).
+  try { process.kill(-pid, 'SIGTERM'); } catch (_) {}
+  // Force-kill anything still alive after 3 seconds
+  setTimeout(() => {
+    try { process.kill(-pid, 'SIGKILL'); } catch (_) {}
+  }, 3000);
 }
 
 // Kill every running process and every running command, wait for all to die.
@@ -278,8 +283,7 @@ function stopAll() {
     const pid = entry.process.pid;
     promises.push(
       new Promise((resolve) => {
-        treeKill(pid, 'SIGKILL', () => resolve());
-        // Safety timeout — resolve after 2s even if treeKill hangs
+        try { process.kill(-pid, 'SIGKILL'); } catch (_) {}
         setTimeout(resolve, 2000);
       })
     );
@@ -291,7 +295,7 @@ function stopAll() {
     const pid = child.pid;
     promises.push(
       new Promise((resolve) => {
-        treeKill(pid, 'SIGKILL', () => resolve());
+        try { process.kill(-pid, 'SIGKILL'); } catch (_) {}
         setTimeout(resolve, 2000);
       })
     );
@@ -321,6 +325,7 @@ function runCommand(project, command, onData, onCommandStatus) {
       ...(_opAgentSock ? { SSH_AUTH_SOCK: _opAgentSock } : {}),
     },
     stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true,
   });
 
   const key = `${project.id}:${command}`;
@@ -359,9 +364,10 @@ function killCommand(projectId, command) {
   const child = runningCommands.get(key);
   if (!child) return;
   runningCommands.delete(key);
-  treeKill(child.pid, 'SIGTERM', (err) => {
-    if (err) { try { treeKill(child.pid, 'SIGKILL'); } catch (_) {} }
-  });
+  try { process.kill(-child.pid, 'SIGTERM'); } catch (_) {}
+  setTimeout(() => {
+    try { process.kill(-child.pid, 'SIGKILL'); } catch (_) {}
+  }, 3000);
 }
 
 function getStatus(projectId) {

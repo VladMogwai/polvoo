@@ -47,7 +47,7 @@ const termConfig = {
  *   claudeMode     — reserved for future use
  */
 export function useTerminal(containerRef, projectId, type, active, options = {}) {
-  const { onReady, onCommand } = options;
+  const { onReady, onCommand, onScrollChange } = options;
 
   const termRef = useRef(null);
   const fitAddonRef = useRef(null);
@@ -59,11 +59,13 @@ export function useTerminal(containerRef, projectId, type, active, options = {})
   const observerInitTimerRef = useRef(null);
   const onReadyRef = useRef(onReady);
   const onCommandRef = useRef(onCommand);
+  const onScrollChangeRef = useRef(onScrollChange);
 
   // Keep refs fresh without triggering re-renders
   useEffect(() => {
     onReadyRef.current = onReady;
     onCommandRef.current = onCommand;
+    onScrollChangeRef.current = onScrollChange;
   });
 
   // ── Fit with retry — waits until container has non-zero dimensions ──────────
@@ -196,15 +198,23 @@ export function useTerminal(containerRef, projectId, type, active, options = {})
     // Track whether the user has manually scrolled up so we don't
     // yank them back to the bottom while they're reading history.
     let userScrolledUp = false;
+    let isWriting = false;
     term.onScroll(() => {
+      // Ignore scroll events fired internally by xterm during data writes —
+      // they can temporarily jump the viewport and falsely mark userScrolledUp.
+      if (isWriting) return;
       const buf = term.buffer.active;
-      userScrolledUp = buf.viewportY < buf.length - term.rows;
+      const atBottom = buf.viewportY >= buf.length - term.rows;
+      userScrolledUp = !atBottom;
+      if (onScrollChangeRef.current) onScrollChangeRef.current(atBottom);
     });
 
     // Listen for PTY output
     unsubRef.current = onPtyOutput(({ sessionId, data }) => {
       if (sessionId === result.sessionId) {
+        isWriting = true;
         term.write(data, () => {
+          isWriting = false;
           if (!userScrolledUp) term.scrollToBottom();
         });
       }
@@ -307,5 +317,9 @@ export function useTerminal(containerRef, projectId, type, active, options = {})
     fitWhenReady();
   }, [fitWhenReady]);
 
-  return { dispose, sendInput, fit, searchAddon: searchAddonRef.current };
+  const scrollToBottom = useCallback(() => {
+    if (termRef.current) termRef.current.scrollToBottom();
+  }, []);
+
+  return { dispose, sendInput, fit, scrollToBottom, searchAddon: searchAddonRef.current };
 }
